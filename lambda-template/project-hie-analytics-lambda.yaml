@@ -1,0 +1,246 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Lambda Functions with RDS access Cloudformation Template
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues:
+    - dev
+    - stg
+    - prod
+
+  S3BName:
+    Type: String
+    Description: S3 Bucket name for Lambda 
+    
+Mappings:
+  EnvConfig:
+    dev:
+      LambdaSubnetId1: subnet-092e6feb6f16ad305
+      LambdaSubnetId2: subnet-04fe05961116e18ba
+      LambdaSecurityGroupId: sg-056a422f0eda72391
+    stg:
+      LambdaSubnetId1: subnet-093620a02fadb09b4
+      LambdaSubnetId2: subnet-0dd1c418bbca6d799 
+      LambdaSecurityGroupId: sg-029d65b336757f594
+    prod:
+      LambdaSubnetId1: subnet-yyyyyyyyyyyyyyy1
+      LambdaSubnetId2: subnet-yyyyyyyyyyyyyyy2
+      LambdaSecurityGroupId: sg-yyyyyyyyyyyyyyy
+
+Resources:
+
+  # psycopg2 layer
+  Psycopg2Layer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub project-hie-analytics-psycopg2-${Env}
+      Description: psycopg2-binary layer for PostgreSQL access
+      CompatibleRuntimes:
+        - python3.14
+      Content:
+        S3Bucket: demo-bucket-idn
+        S3Key: python.zip
+
+
+  #retry handler
+  RetryHandlerLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub project-hie-analytics-cdq-${Env}-retry-backoff
+      Description: Retry/backoff handler layer
+      CompatibleRuntimes:
+        - python3.14
+      Content:
+        S3Bucket: demo-bucket-idn
+        S3Key: project-hie-analytics-retry-backoff.zip
+
+  
+  # LAMBDA 1: TABLE GENERATOR
+  ProcessTableGeneratorLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      FunctionName: !Sub project-hie-analytics-process-table-generator-${Env}
+      Role: !ImportValue 
+        Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
+      Runtime: python3.14
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Timeout: 300
+
+      Code:
+        ZipFile: |
+          import json
+          import psycopg2
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+
+              secret_arn = os.environ['DB_SECRET_ARN']
+              host = os.environ['DB_HOST']
+
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps("Lambda working with psycopg2 layer")
+              }      
+      Layers:
+        - !Ref Psycopg2Layer
+        - !Ref RetryHandlerLayer
+
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !ImportValue
+            Fn::Sub: project-hie-analytics-rds-secret-arn-${Env}
+          DB_HOST: !ImportValue
+            Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
+          DB_NAME: !ImportValue 
+            Fn::Sub: RDSDBName-${Env}
+
+      VpcConfig:
+        SubnetIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId2]
+        SecurityGroupIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
+
+  # LAMBDA 2: PROCESS MANIFEST METADATA
+  ProcessPayloadManifestLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      FunctionName: !Sub project-hie-analytics-process-payload-manifest-metadata-${Env}
+      Role: !ImportValue 
+        Fn::Sub: LambdaInsertionRoleArn-${Env}
+      Runtime: python3.14
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Timeout: 300
+
+      Code:
+        ZipFile: |
+          import json
+          import psycopg2
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+
+              secret_arn = os.environ['DB_SECRET_ARN']
+              host = os.environ['DB_HOST']
+
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps("Lambda working with psycopg2 layer")
+              }
+        
+      Layers:
+        - !Ref Psycopg2Layer
+
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !ImportValue 
+            Fn::Sub: project-hie-analytics-rds-secret-arn-${Env}
+          DB_HOST: !ImportValue
+            Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
+          DB_NAME: !ImportValue 
+            Fn::Sub: RDSDBName-${Env}
+          METADATA_QUEUE_URL: !ImportValue
+            Fn::Sub: MetadataProcessingQueueUrl-${Env}
+          
+
+      VpcConfig:
+        SubnetIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId2]
+        SecurityGroupIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
+
+
+  # LAMBDA 3: PROCESS INSERTION LAMBDA
+  ProcessInsertionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      FunctionName: !Sub project-hie-analytics-process-insertion-lambda-${Env}
+      Role: !ImportValue 
+        Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
+      Runtime: python3.14
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Timeout: 300
+
+      Code:
+        ZipFile: |
+          import json
+          import psycopg2
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+
+              secret_arn = os.environ['DB_SECRET_ARN']
+              host = os.environ['DB_HOST']
+
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps("Lambda working with psycopg2 layer")
+              }     
+
+      Layers:
+        - !Ref Psycopg2Layer
+        - !Ref RetryHandlerLayer
+
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !ImportValue 
+            Fn::Sub: project-hie-analytics-rds-secret-arn-${Env}
+          DB_HOST: !ImportValue 
+            Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
+          DB_NAME: !ImportValue 
+            Fn::Sub: RDSDBName-${Env}
+          ENVIRONMENT: !Ref Env
+
+      VpcConfig:
+        SubnetIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId2]
+        SecurityGroupIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
+ 
+Outputs:
+
+  ProcessTableGeneratorLambdaArn:
+    Value: !GetAtt ProcessTableGeneratorLambda.Arn
+    Export:
+      Name: !Sub project-hie-analytics-process-table-generator-lambda-arn-${Env}
+
+  ProcessPayloadManifestLambdaArn:
+    Value: !GetAtt ProcessPayloadManifestLambda.Arn
+    Export:
+      Name: !Sub project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+
+  ProcessInsertionLambdaArn:
+    Value: !GetAtt ProcessInsertionLambda.Arn
+    Export:
+      Name: !Sub project-hie-analytics-process-insertion-lambda-arn-${Env}
