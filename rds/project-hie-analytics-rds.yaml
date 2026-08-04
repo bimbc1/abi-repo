@@ -1,0 +1,102 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HIE Analytics RDS CloudFormation Template
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues:
+    - dev
+    - stg
+    - prod
+
+  InstanceClass:
+    Type: String
+    Description: Database Instance Type
+    Default: db.t3.micro
+  DBStorage:
+    Type: String
+    Description: Database Storage Size
+    Default: 20
+  DBName:
+    Type: String
+    Description: Database Name
+    Default: HieAnalyticsCCDA
+    
+
+Mappings:
+  EnvConfig:
+    dev:
+      RDSSubnetId1: subnet-0303dee48df83e67e
+      RDSSubnetId2: subnet-021937b00580a0d4d
+      RDSSecurityGroupId: sg-045e33a2272492a62
+    stg:
+      RDSSubnetId1: subnet-001257559c5e84a0e
+      RDSSubnetId2: subnet-03e86a1e4b1a5da62
+      RDSSecurityGroupId: sg-0fb0dc6c7403645f8
+    prod:
+      RDSSubnetId1: subnet-0081a3e3a122285ad
+      RDSSubnetId2: subnet-04e4b3343ab8f2c98
+      RDSSecurityGroupId: sg-yyyyyyyyyyyyyyyy
+
+Resources:
+  RDSDBSubnetGroup:
+    Type: AWS::RDS::DBSubnetGroup
+    Properties:
+      DBSubnetGroupDescription: subnet group
+      SubnetIds:
+        - !FindInMap [EnvConfig, !Ref Env, RDSSubnetId1]
+        - !FindInMap [EnvConfig, !Ref Env, RDSSubnetId2]
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+
+  RDSDB:
+    Type: AWS::RDS::DBInstance
+    Properties:
+      DBName: !Ref DBName
+      DBInstanceIdentifier: !Sub project-hie-analytics-admin-registry-db-${Env}
+      AllocatedStorage: !Ref DBStorage
+      StorageType: gp2
+      StorageEncrypted: true # Required by VAEC SCP policy
+      DBInstanceClass: !Ref InstanceClass
+      Engine: postgres
+      EngineVersion: '17.4'
+      MultiAZ: true
+      MasterUsername: !Sub
+        - "{{resolve:secretsmanager:${SecretArn}:SecretString:username}}"
+        - SecretArn: !ImportValue
+            Fn::Sub: project-hie-analytics-rds-secret-arn-${Env}
+      MasterUserPassword: !Sub
+        - "{{resolve:secretsmanager:${SecretArn}:SecretString:password}}"
+        - SecretArn: !ImportValue
+            Fn::Sub:  project-hie-analytics-rds-secret-arn-${Env}
+
+      PubliclyAccessible: false
+      VPCSecurityGroups:
+        - !FindInMap [EnvConfig, !Ref Env, RDSSecurityGroupId]
+      DBSubnetGroupName: !Ref RDSDBSubnetGroup
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+
+Outputs:
+  RDSDBEndpointAddress:
+    Description: The endpoint address of the RDS instance
+    Value: !GetAtt RDSDB.Endpoint.Address
+    Export:
+      Name: !Sub project-hie-analytics-RDSDBEndpointAddress-${Env}
+
+  RDSDBName: 
+    Value: !Ref DBName
+    Export: 
+      Name: !Sub RDSDBName-${Env}
+
