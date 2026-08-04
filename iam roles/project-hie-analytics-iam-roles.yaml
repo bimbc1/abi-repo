@@ -137,14 +137,6 @@ Resources:
                   - sqs:SendMessage
                 Resource: "*"
 
-        - PolicyName: !Sub project-hie-analytics-lambda-sns-publish-policy-${Env}
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:project-hie-analytics-partner-recovery-alerts-${Env}
         - PolicyName: !Sub project-hie-analytics-lambda-invoke-notification-${Env}
           PolicyDocument:
             Version: '2012-10-17'
@@ -192,32 +184,6 @@ Resources:
                   - sqs:SendMessage
                 Resource: '*'
 
-        - PolicyName: lambda-sns-publish-policy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:partner-recovery-alerts
-
-        - PolicyName: lambda-invoke-notification
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - lambda:InvokeFunction
-                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:project-hie-analytics-cdq-${Env}-process-notification
-
-        - PolicyName: lambda-sqs-access-policy
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:*
-                Resource: '*'
                 
   IAMRolehieEC2SSMSessionRole:
     Type: AWS::IAM::Role
