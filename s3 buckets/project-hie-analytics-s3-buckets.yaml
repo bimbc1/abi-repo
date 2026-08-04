@@ -1,0 +1,72 @@
+---
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HIE Analytics S3 Bucket with S3 Lambda trigger
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues:
+    - dev
+    - stg
+    - prod
+
+Resources:
+  # Lambda Permission: Allow S3 to invoke Lambda
+  AllowOracleBucketInvokeProcessManifestLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue 
+        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+      Action: lambda:InvokeFunction
+      Principal: s3.amazonaws.com
+      SourceArn: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-documents-${Env}
+
+
+  # Oracle Document Uploads Bucket
+  OracleDocumentsBucket:
+    Type: AWS::S3::Bucket
+    DependsOn:
+      - AllowOracleBucketInvokeProcessManifestLambda
+    Properties:
+      BucketName: !Sub project-hie-analytics-oraclehealth-documents-${Env}
+      LifecycleConfiguration:
+        Rules:
+          - Id: DeleteAfter14Days
+            Status: Enabled
+            ExpirationInDays: 14
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      NotificationConfiguration:
+        LambdaConfigurations:
+          - Event: s3:ObjectCreated:*
+            Function: !ImportValue 
+              Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+        - Key: Name
+          Value: !Sub project-hie-analytics-oraclehealth-documents-${Env}
+        - Key: Purpose
+          Value: !Sub oraclehealth-documents-${Env}
+
+
+Outputs:
+
+  OracleBucketArn:
+    Description: ARN for Oracle Document Uploads bucket
+    Value: !GetAtt OracleDocumentsBucket.Arn
+    Export:
+      Name: !Sub OracleDocumentUploadsBucketArn-${Env}
+
+  OracleBucketName:
+    Description: Name for Oracle Document Uploads bucket
+    Value: !Ref OracleDocumentsBucket
+    Export:
+      Name: !Sub OracleDocumentUploadsBucketName-${Env}
