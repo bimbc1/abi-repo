@@ -125,21 +125,28 @@ def ensure_tables(cur):
             batch_id TEXT NOT NULL,
             environment VARCHAR(20) NOT NULL,
             edipi BIGINT NOT NULL,
+            batch_name TEXT,
             SSM TEXT NOT NULL DEFAULT 'Null' CHECK (SSM = 'Null'),
             patient_last_name VARCHAR(100) NOT NULL,
             patient_first_name VARCHAR(100) NOT NULL,
-            date_of_receipt_utc TIMESTAMPTZ NOT NULL,
+            date_of_receipt_utc TIMESTAMPTZ,
+            date_of_disclosure_utc TIMESTAMPTZ,
             file_arrival_time_utc TIMESTAMPTZ NOT NULL,
-            sending_organization VARCHAR(255) NOT NULL,
-            purpose_of_use VARCHAR(100),
-            purpose_of_use_code VARCHAR(50),
+            sending_organization VARCHAR(255),
+            receiving_organization_id TEXT,
+            receiving_organization VARCHAR(255),
+            partner VARCHAR(150),
+            user_id TEXT,
+            user_name VARCHAR(150),
             user_role VARCHAR(150),
+            role_code VARCHAR(50),
             document_format_code VARCHAR(255),
             document_loinc_code VARCHAR(50),
             document_id TEXT NOT NULL,
             repository_id TEXT,
             source_id TEXT,
-            ccda_file_name TEXT NOT NULL
+            ccda_file_name TEXT NOT NULL,
+            commonwell_indicator VARCHAR(20)
         );
     """)
 
