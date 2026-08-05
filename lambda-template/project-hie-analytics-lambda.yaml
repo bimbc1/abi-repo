@@ -160,7 +160,7 @@ Resources:
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
           METADATA_QUEUE_URL: !ImportValue
-            Fn::Sub: MetadataProcessingQueueUrl-${Env}
+            Fn::Sub: DatabaseProcessorQueueUrl-${Env}
           
 
       VpcConfig:
