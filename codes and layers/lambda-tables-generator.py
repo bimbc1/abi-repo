@@ -119,6 +119,10 @@ def ensure_tables(cur):
         );
     """)
 
+    # NOTE: purpose_of_use / purpose_of_use_code added -- both the
+    # PatientReceivedReport and PatientDisclosureReport files carry
+    # Purpose_of_Use and Purpose_of_Use_Code columns, but this table had
+    # no matching columns for either one before this change.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS patient_details (
             partner_id UUID NOT NULL,
@@ -140,6 +144,8 @@ def ensure_tables(cur):
             user_name VARCHAR(150),
             user_role VARCHAR(150),
             role_code VARCHAR(50),
+            purpose_of_use VARCHAR(255),
+            purpose_of_use_code VARCHAR(50),
             document_format_code VARCHAR(255),
             document_loinc_code VARCHAR(50),
             document_id TEXT NOT NULL,
