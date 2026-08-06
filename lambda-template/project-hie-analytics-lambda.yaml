@@ -150,6 +150,7 @@ Resources:
         
       Layers:
         - !Ref Psycopg2Layer
+        - !Ref RetryHandlerLayer
 
       Environment:
         Variables:
