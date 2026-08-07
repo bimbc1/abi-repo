@@ -130,7 +130,7 @@ def ensure_tables(cur):
             environment VARCHAR(20) NOT NULL,
             edipi BIGINT NOT NULL,
             file_name TEXT,
-            SSN TEXT NOT NULL DEFAULT 'Null' CHECK (SSN = 'Null'),
+            SSM TEXT NOT NULL DEFAULT 'Null' CHECK (SSM = 'Null'),
             patient_last_name VARCHAR(100) NOT NULL,
             patient_first_name VARCHAR(100) NOT NULL,
             date_of_receipt_utc TIMESTAMPTZ,
@@ -161,7 +161,7 @@ def ensure_tables(cur):
             partner_id UUID NOT NULL,
             batch_id TEXT NOT NULL,
             partner_batch_key TEXT NOT NULL,
-            batch_name TEXT,
+            file_name TEXT,
             manifest_file_count INTEGER,
             actual_file_count INTEGER,
             count_discrepancy INTEGER,
@@ -170,7 +170,7 @@ def ensure_tables(cur):
             submission_timestamp TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW(),
-            CONSTRAINT unique_batch UNIQUE (partner_id, batch_id, batch_name)
+            CONSTRAINT unique_batch UNIQUE (partner_id, batch_id, file_name)
         );
     """)
 
