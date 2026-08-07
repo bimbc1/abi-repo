@@ -129,7 +129,7 @@ def ensure_tables(cur):
             batch_id TEXT NOT NULL,
             environment VARCHAR(20) NOT NULL,
             edipi BIGINT NOT NULL,
-            batch_name TEXT,
+            file_name TEXT,
             SSN TEXT NOT NULL DEFAULT 'Null' CHECK (SSN = 'Null'),
             patient_last_name VARCHAR(100) NOT NULL,
             patient_first_name VARCHAR(100) NOT NULL,
