@@ -130,7 +130,7 @@ def ensure_tables(cur):
             environment VARCHAR(20) NOT NULL,
             edipi BIGINT NOT NULL,
             file_name TEXT,
-            SSM TEXT NOT NULL DEFAULT 'Null' CHECK (SSM = 'Null'),
+            SSN TEXT NOT NULL DEFAULT 'Null' CHECK (SSN = 'Null'),
             patient_last_name VARCHAR(100) NOT NULL,
             patient_first_name VARCHAR(100) NOT NULL,
             date_of_receipt_utc TIMESTAMPTZ,
