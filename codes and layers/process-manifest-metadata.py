@@ -28,10 +28,24 @@ DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "ccda01")
 
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
+# NOTE: the CloudFormation template supplies the subject line in
+# $PARTNER_NAME / $ENVIRONMENT (shell-style) placeholders, while
+# RESUMED_MESSAGE_TEMPLATE below uses {partner_name} / {environment}
+# (Python .format() style). render_sns_template() (below) supports both
+# so this Lambda works with either style without needing the template
+# changed.
+SNS_SUBJECT_TEMPLATE = os.environ.get(
+    "SNS_SUBJECT_TEMPLATE",
+    "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
+)
 RESUMED_MESSAGE_TEMPLATE = os.environ.get(
     "RESUMED_MESSAGE_TEMPLATE",
     "{partner_name} file delivery has resumed and files are being received successfully in the {environment} environment."
 )
+# Optional shared-distribution-list warning appended to the recovery SNS
+# body, if configured. Empty by default -- if WARNING_INFO isn't set,
+# nothing extra is appended.
+WARNING_INFO = os.environ.get("WARNING_INFO", "")
 PROCESSING_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
     "PROCESSING_FAILURE_MESSAGE_TEMPLATE",
     "Metadata processing failed. Bucket: {bucket} Batch ID: {batch_id} Partner: {partner_name} Error: {error}"
@@ -423,18 +437,40 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
     return False
 
 
+def render_sns_template(template, partner_name, environment):
+    """Fill a subject/message template with partner_name and environment,
+    supporting both placeholder styles the CloudFormation template's env
+    vars use: $PARTNER_NAME / $ENVIRONMENT (SNS_SUBJECT_TEMPLATE) and
+    {partner_name} / {environment} (RESUMED_MESSAGE_TEMPLATE)."""
+    rendered = template.replace("$PARTNER_NAME", str(partner_name)).replace(
+        "$ENVIRONMENT", str(environment)
+    )
+    try:
+        rendered = rendered.format(partner_name=partner_name, environment=environment)
+    except (KeyError, IndexError):
+        # Template didn't use {partner_name}/{environment} placeholders --
+        # the $-style substitution above already covered it.
+        pass
+    return rendered
+
+
 def send_recovery_sns(partner_name, partner_id, environment):
+    """Send the recovery notification. Called only when clear_breach_flag()
+    reports an actual breach_flag TRUE -> FALSE transition (see its
+    docstring and sync_partner_state_and_breach_flag) -- never for a
+    brand-new partner_schedule row and never for an already-FALSE ->
+    FALSE on-time upload."""
     if not SNS_TOPIC_ARN:
         logger.warning("SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
         return
     try:
-        message = RESUMED_MESSAGE_TEMPLATE.format(
-            partner_name=partner_name,
-            environment=environment
-        )
+        subject = render_sns_template(SNS_SUBJECT_TEMPLATE, partner_name, environment)
+        message = render_sns_template(RESUMED_MESSAGE_TEMPLATE, partner_name, environment)
+        if WARNING_INFO:
+            message = f"{message}\n\n{WARNING_INFO}"
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
-            Subject=f"Notification of {partner_name} File Delivery Resumed in the - {environment} environment",
+            Subject=subject,
             Message=message,
         )
         put_metric(
@@ -1129,7 +1165,19 @@ def lambda_handler(event, context):
                     {"Name": "Status", "Value": "Failure"}
                 ]
             )
-            raise
+            # Same pattern as lambda_tables_generator.py: instead of a
+            # bare raise (which just falls through to native SQS/S3
+            # retry/DLQ behavior), hand the failure to the retry_utils
+            # layer and return 202 so the invocation itself is reported
+            # as handled.
+            invoke_retry_handler(e, event)
+            return {
+                "statusCode": 202,
+                "body": json.dumps({
+                    "message": "Metadata Lambda processing failed; retry handler invoked.",
+                    "results": results
+                })
+            }
     return {
         "statusCode": 200,
         "body": json.dumps({
