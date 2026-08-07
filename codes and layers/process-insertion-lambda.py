@@ -153,7 +153,7 @@ def get_existing_batch_counts(cur, partner_id, batch_id, batch_name):
         """
         SELECT manifest_file_count, actual_file_count
         FROM manifest_batch
-        WHERE partner_id = %s AND batch_id = %s AND batch_name = %s
+        WHERE partner_id = %s AND batch_id = %s AND file_name = %s
         """,
         (partner_id, batch_id, batch_name),
     )
@@ -238,17 +238,15 @@ def derive_batch_name(file_name, batch_id, fallback):
 
 
 def upsert_manifest_row(cur, partner_id, partner_batch_key, batch_id, batch_name, expected_count, actual_count):
-    # NOTE: batch_name now carries a short, derived name from the actual
-    # uploaded file_name -- see derive_batch_name() -- e.g.
+    # NOTE: the batch_name parameter carries a short, derived name from
+    # the actual uploaded file_name -- see derive_batch_name() -- e.g.
     # "PatientDisclosureReport" or "outbound_ccda_manifest", not a
     # generic "CCDA"/"REPORT" label and not the raw filename (batch_id
-    # prefix and extension are stripped). This is a deliberate
-    # no-schema-change choice: manifest_batch has no dedicated filename
-    # column, and the caller was told not to ALTER TABLE, so the derived
-    # name goes into the one existing free-text column that's already
-    # unique per (partner_id, batch_id, batch_name).
-    # Trade-off: you can no longer do `WHERE batch_name = 'CCDA'` to group
-    # rows by file type across batches -- each row's batch_name is still
+    # prefix and extension are stripped). It is written into
+    # manifest_batch's file_name column below, which is unique per
+    # (partner_id, batch_id, file_name).
+    # Trade-off: you can no longer do `WHERE file_name = 'CCDA'` to group
+    # rows by file type across batches -- each row's file_name is still
     # a one-off value specific to that upload's file type.
     now = datetime.now(timezone.utc)
 
@@ -258,7 +256,7 @@ def upsert_manifest_row(cur, partner_id, partner_batch_key, batch_id, batch_name
             partner_id,
             batch_id,
             partner_batch_key,
-            batch_name,
+            file_name,
             manifest_file_count,
             actual_file_count,
             count_discrepancy,
@@ -268,7 +266,7 @@ def upsert_manifest_row(cur, partner_id, partner_batch_key, batch_id, batch_name
             updated_at
         )
         VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-        ON CONFLICT (partner_id, batch_id, batch_name)
+        ON CONFLICT (partner_id, batch_id, file_name)
         DO UPDATE SET
             partner_batch_key = EXCLUDED.partner_batch_key,
             manifest_file_count = EXCLUDED.manifest_file_count,
@@ -345,11 +343,9 @@ def insert_patient_details_rows(cur, partner_id, batch_id, environment, batch_na
     file itself is not re-read from S3 -- the producer already parsed it.
 
     batch_name is the same derived value (see derive_batch_name()) that
-    upsert_manifest_row() writes to manifest_batch for this same batch --
-    passed through here so patient_details carries it too, in its
-    file_name column (patient_details' column was renamed from
-    batch_name to file_name; manifest_batch's column is still
-    batch_name -- only the patient_details write below changed)."""
+    upsert_manifest_row() writes to manifest_batch's file_name column for
+    this same batch -- passed through here so patient_details carries it
+    too, in its own file_name column."""
     arrival_time = datetime.now(timezone.utc)
 
     delete_patient_rows_for_batch(cur, partner_id, batch_id)
