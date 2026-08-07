@@ -161,7 +161,7 @@ Resources:
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
           METADATA_QUEUE_URL: !ImportValue
-            Fn::Sub: DatabaseProcessorQueueUrl-${Env}
+            Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
           SNS_TOPIC_ARN: !Sub arn:${AWS::Partition}:sns:${AWS::Region}:${AWS::AccountId}:partner-recovery-alerts
           SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
           RESUMED_MESSAGE_TEMPLATE: |
