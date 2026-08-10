@@ -684,6 +684,10 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "trigger_key": trigger_key,
             "batch_id": batch_id
         },
+        # partner_id is also duplicated at the top level (below) as a
+        # convenience field for consumers that don't want to dig into
+        # the nested "partner" object just to filter/route by partner.
+        "partner_id": partner_context.get("partner_id"),
         # partner_id/partner_batch_key/environment/partner_name are
         # resolved once per batch in build_metadata_messages() and
         # handed to the database insertion Lambda so it no longer needs
@@ -752,6 +756,10 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "trigger_key": trigger_key,
             "batch_id": batch_id
         },
+        # partner_id is also duplicated at the top level (below) as a
+        # convenience field for consumers that don't want to dig into
+        # the nested "partner" object just to filter/route by partner.
+        "partner_id": partner_context.get("partner_id"),
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
