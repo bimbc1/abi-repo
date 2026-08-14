@@ -122,7 +122,6 @@ def upsert_manifest_metadata(message):
     source  = message.get("source", {})
     partner = message.get("partner", {})
     counts  = message.get("counts", {})
-    status  = message.get("status", {})
     files   = message.get("files", {})
 
     batch_id          = source.get("batch_id")
@@ -131,18 +130,17 @@ def upsert_manifest_metadata(message):
     environment       = partner.get("environment")
     partner_name      = partner.get("partner_name")
     file_name         = files.get("manifest", {}).get("file_name")
-    # ← reads file_name from files.manifest.file_name
 
     if not partner_id:
         raise ValueError(f"partner_id missing from message for batch_id={batch_id}")
 
-    expected    = counts.get("manifest_expected", {}).get("CCDA", 0)
-    # ← changed from "PatientReceivedCCDA" to "CCDA"
-    actual      = counts.get("zip_actual", 0)
-    # ← changed from "zip_actual_count" to "zip_actual"
-    discrepancy = counts.get("discrepancy", abs((actual or 0) - (expected or 0)))
-    # ← changed from "count_discrepancy" to "discrepancy"
+    expected    = counts.get("manifest_expected_count", 0)
+    actual      = counts.get("zip_actual_count", 0)
+    discrepancy = counts.get("count_discrepancy", abs((actual or 0) - (expected or 0)))
     now         = datetime.now(timezone.utc)
+
+    logger.info("batch_id=%s expected=%s actual=%s discrepancy=%s",
+                batch_id, expected, actual, discrepancy)
 
     cur = conn.cursor()
     cur.execute(
@@ -153,16 +151,23 @@ def upsert_manifest_metadata(message):
             submission_timestamp, created_at, updated_at,
             file_name
         ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ON CONFLICT (partner_id, batch_id, file_name)
+        DO UPDATE SET
+            partner_batch_key    = EXCLUDED.partner_batch_key,
+            manifest_file_count  = EXCLUDED.manifest_file_count,
+            actual_file_count    = EXCLUDED.actual_file_count,
+            count_discrepancy    = EXCLUDED.count_discrepancy,
+            submission_timestamp = EXCLUDED.submission_timestamp,
+            updated_at           = EXCLUDED.updated_at
         """,
         (partner_id, batch_id, str(partner_batch_key),
          expected, actual, discrepancy, now, now, now,
          file_name),
     )
 
-    if status.get("ready_for_db_insert") and counts.get("all_match"):
-        # ← changed from "ready_for_database_insert" to "ready_for_db_insert"
-        # ← changed from "count_match" to "all_match"
-        rows = message.get("patient_received_report", {}).get("rows", [])
+    rows = message.get("patient_received_report", {}).get("rows", [])
+
+    if rows:
         cur.execute(
             "DELETE FROM patient_details WHERE partner_id = %s AND batch_id = %s",
             (partner_id, batch_id),
@@ -177,31 +182,43 @@ def upsert_manifest_metadata(message):
             cur.execute(
                 """
                 INSERT INTO patient_details (
-                    partner_id, batch_id, environment, edipi,
+                    partner_id, batch_id, environment, file_name, edipi,
                     patient_last_name, patient_first_name,
-                    date_of_receipt_utc, file_arrival_time_utc, sending_organization,
+                    date_of_receipt_utc, date_of_disclosure_utc,
+                    file_arrival_time_utc, sending_organization,
                     purpose_of_use, purpose_of_use_code, user_role,
                     document_format_code, document_loinc_code, document_id,
                     repository_id, source_id, ccda_file_name,
-                    file_name, date_of_disclosure_utc,
-                    receiving_organization, partner, user_id,
-                    user_name, role, role_code, commonwell_indicator
+                    receiving_organization, partner,
+                    user_id, user_name, role, role_code, commonwell_indicator
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 """,
-                (partner_id, batch_id, environment, edipi_value,
+                (partner_id, batch_id, environment, file_name, edipi_value,
                  r.get("last_name"), r.get("first_name"),
-                 r.get("receipt_date"), arrival, r.get("sending_org"),
-                 r.get("purpose"), r.get("purpose_code"), r.get("role"),
-                 r.get("format_code"), r.get("loinc_code"), r.get("document_id"),
-                 r.get("repository_id"), r.get("source_id"), r.get("ccda_file"),
-                 file_name, r.get("date_of_disclosure_utc"),
-                 r.get("receiving_organization"), partner_name, r.get("user_id"),
-                 r.get("user_name"), r.get("role"), r.get("role_code"), r.get("commonwell_indicator")),
+                 r.get("date_of_receipt"),
+                 r.get("disclosure_date"),
+                 arrival,
+                 r.get("sending_org"),
+                 r.get("purpose_of_use") or r.get("purpose"),
+                 r.get("purpose_of_use_code") or r.get("purpose_code"),
+                 r.get("user_role"),
+                 r.get("document_format_code"),
+                 r.get("document_loinc_code") or r.get("loinc_code"),
+                 r.get("document_id"),
+                 r.get("repository_id"),
+                 r.get("source_id"),
+                 r.get("ccda_file_name") or r.get("ccda_file"),
+                 r.get("receiving_organization") or r.get("receiving_org"),
+                 r.get("partner") or partner_name,
+                 r.get("user_id"),
+                 r.get("user_name"),
+                 r.get("role"), r.get("role_code"),
+                 r.get("commonwell_indicator")),
             )
             inserted += 1
         logger.info("Inserted %d patient_details rows for batch_id=%s", inserted, batch_id)
     else:
-        logger.info("Batch %s not ready / count mismatch; manifest_batch only", batch_id)
+        logger.info("No patient rows in message for batch_id=%s skipping patient_details", batch_id)
 
     conn.commit()
     logger.info("Upserted manifest_batch for batch_id=%s", batch_id)
@@ -217,8 +234,8 @@ def upsert_patient_report_metadata(message):
     partner_id   = partner.get("partner_id")
     environment  = partner.get("environment")
     partner_name = partner.get("partner_name")
-    file_name    = files.get("manifest", {}).get("file_name")
-    # ← reads file_name from files.manifest.file_name
+    file_name    = files.get("report", {}).get("file_name")
+    # ← reads file_name from files.report.file_name
 
     if not partner_id:
         raise ValueError(f"partner_id missing from message for batch_id={batch_id}")
@@ -249,26 +266,46 @@ def upsert_patient_report_metadata(message):
         cur.execute(
             """
             INSERT INTO patient_details (
-                partner_id, batch_id, environment, edipi,
+                partner_id, batch_id, environment, file_name, edipi,
                 patient_last_name, patient_first_name,
-                date_of_receipt_utc, file_arrival_time_utc, sending_organization,
+                date_of_receipt_utc, date_of_disclosure_utc,
+                file_arrival_time_utc, sending_organization,
                 purpose_of_use, purpose_of_use_code, user_role,
                 document_format_code, document_loinc_code, document_id,
                 repository_id, source_id, ccda_file_name,
-                file_name, date_of_disclosure_utc,
-                receiving_organization, partner, user_id,
-                user_name, role, role_code, commonwell_indicator
+                receiving_organization, partner,
+                user_id, user_name, role, role_code, commonwell_indicator
             ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
-            (partner_id, batch_id, environment, edipi_value,
+            (partner_id, batch_id, environment, file_name, edipi_value,
              r.get("last_name"), r.get("first_name"),
-             r.get("receipt_date"), arrival, r.get("sending_org"),
-             r.get("purpose"), r.get("purpose_code"), r.get("role"),
-             r.get("format_code"), r.get("loinc_code"), r.get("document_id"),
-             r.get("repository_id"), r.get("source_id"), r.get("ccda_file"),
-             file_name, r.get("date_of_disclosure_utc"),
-             r.get("receiving_organization"), partner_name, r.get("user_id"),
-             r.get("user_name"), r.get("role"), r.get("role_code"), r.get("commonwell_indicator")),
+             r.get("date_of_receipt"),
+             # ← RECEIVED: date_of_receipt, DISCLOSURE: not present
+             r.get("disclosure_date"),
+             # ← DISCLOSURE: disclosure_date, RECEIVED: not present
+             arrival,
+             r.get("sending_org"),
+             r.get("purpose_of_use") or r.get("purpose"),
+             # ← RECEIVED: purpose_of_use, DISCLOSURE: purpose
+             r.get("purpose_of_use_code") or r.get("purpose_code"),
+             # ← RECEIVED: purpose_of_use_code, DISCLOSURE: purpose_code
+             r.get("user_role"),
+             r.get("document_format_code"),
+             r.get("document_loinc_code") or r.get("loinc_code"),
+             # ← RECEIVED: document_loinc_code, DISCLOSURE: loinc_code
+             r.get("document_id"),
+             r.get("repository_id"),
+             r.get("source_id"),
+             r.get("ccda_file_name") or r.get("ccda_file"),
+             # ← RECEIVED: ccda_file_name, DISCLOSURE: ccda_file
+             r.get("receiving_organization") or r.get("receiving_org"),
+             # ← RECEIVED: receiving_organization, DISCLOSURE: receiving_org
+             r.get("partner") or partner_name,
+             # ← DISCLOSURE: partner, RECEIVED: partner_name
+             r.get("user_id"),
+             r.get("user_name"),
+             r.get("role"), r.get("role_code"),
+             r.get("commonwell_indicator")),
         )
         inserted += 1
 
