@@ -16,24 +16,12 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
 METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
 
-# ------------------------------------------------------------
-# DB / SNS config -- this Lambda now owns partner lookup, the
-# partner_transmission_state update, and breach-flag clearing, so it
-# needs the same DB + SNS configuration the database insertion Lambda
-# used to have for those jobs.
-# ------------------------------------------------------------
 DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
 DB_HOST = os.environ["DB_HOST"]
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "ccda01")
 
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
-# NOTE: the CloudFormation template supplies the subject line in
-# $PARTNER_NAME / $ENVIRONMENT (shell-style) placeholders, while
-# RESUMED_MESSAGE_TEMPLATE below uses {partner_name} / {environment}
-# (Python .format() style). render_sns_template() (below) supports both
-# so this Lambda works with either style without needing the template
-# changed.
 SNS_SUBJECT_TEMPLATE = os.environ.get(
     "SNS_SUBJECT_TEMPLATE",
     "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
@@ -42,9 +30,6 @@ RESUMED_MESSAGE_TEMPLATE = os.environ.get(
     "RESUMED_MESSAGE_TEMPLATE",
     "{partner_name} file delivery has resumed and files are being received successfully in the {environment} environment."
 )
-# Optional shared-distribution-list warning appended to the recovery SNS
-# body, if configured. Empty by default -- if WARNING_INFO isn't set,
-# nothing extra is appended.
 WARNING_INFO = os.environ.get("WARNING_INFO", "")
 PROCESSING_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
     "PROCESSING_FAILURE_MESSAGE_TEMPLATE",
@@ -77,29 +62,17 @@ def invoke_retry_handler(error, event):
         logger.error(f"Retry handler invocation failed: {e}")
 
 
-# ============================================================
 # COMMON HELPERS
-# ============================================================
 def utc_now_iso():
-    # Returns current UTC time as an ISO string.
     return datetime.now(timezone.utc).isoformat()
 
 
 def extract_batch_id(filename):
-    # Batch ID is the first TWO underscore-separated segments of the
-    # filename -- e.g. "1234_12121" out of
-    # "1234_12121_outbound_ccda_manifest.txt". Both segments together are
-    # what list_batch_keys()/find_available_keys() use to scope a batch's
-    # files; using only the first segment would lump unrelated batches
-    # that happen to share the same leading number into the same S3
-    # listing and risk cross-matching their manifest/report/zip files.
     parts = filename.split("_")
     return "_".join(parts[:2])
 
 
-# ============================================================
 # FILE NAME MATCHING
-# ============================================================
 def is_manifest_file(filename):
     return filename.lower().endswith("manifest.txt")
 
@@ -238,12 +211,7 @@ def mark_batch_as_sent(bucket, manifest_key):
     except Exception as e:
         logger.warning("Could not tag %s as sent: %s", manifest_key, e)
 
-
-# ============================================================
 # DATABASE HELPERS
-# (moved here from the database insertion Lambda -- everything except
-# the manifest_batch / patient_details writes now lives in this Lambda)
-# ============================================================
 def get_conn():
     try:
         secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
@@ -307,8 +275,6 @@ def update_partner_state(cur, partner_id, object_key):
     now = datetime.now(timezone.utc)
     filename = os.path.basename(object_key)
     batch_id = extract_batch_id(filename)
-    # Strip the batch_id prefix (now 2 segments, e.g. "1234_12121_") off
-    # the front of the filename, rather than just the first underscore.
     batch_prefix = f"{batch_id}_"
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
     cur.execute(
@@ -448,8 +414,6 @@ def render_sns_template(template, partner_name, environment):
     try:
         rendered = rendered.format(partner_name=partner_name, environment=environment)
     except (KeyError, IndexError):
-        # Template didn't use {partner_name}/{environment} placeholders --
-        # the $-style substitution above already covered it.
         pass
     return rendered
 
@@ -516,9 +480,7 @@ def send_processing_failure_sns(error, bucket, batch_id, partner_name=None):
         logger.exception("Failed to send processing failure SNS notification")
 
 
-# ============================================================
 # FILE VALIDATION AND COUNTING
-# ============================================================
 def read_manifest_expected_counts(bucket, key):
     """Read the manifest file and extract expected counts."""
     obj = s3.get_object(Bucket=bucket, Key=key)
@@ -583,7 +545,6 @@ def extract_received_report_rows(bucket, key):
             "edipi": parts[0],
             "last_name": parts[1],
             "first_name": parts[2],
-            # parts[3] is SSN -- intentionally not carried forward.
             "receipt_date": parts[4],
             "sending_org": parts[5],
             "purpose": parts[6],
@@ -631,7 +592,6 @@ def extract_disclosure_report_rows(bucket, key):
             "edipi": parts[0],
             "last_name": parts[1],
             "first_name": parts[2],
-            # parts[3] is SSN -- intentionally not carried forward.
             "disclosure_date": parts[4],
             "receiving_org_id": parts[5],
             "receiving_org": parts[6],
@@ -650,9 +610,7 @@ def extract_disclosure_report_rows(bucket, key):
     return rows
 
 
-# ============================================================
 # SQS MESSAGE BUILDERS
-# ============================================================
 def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta, zip_meta,
                                      manifest_expected_counts, partner_context):
     """Build the SQS message that carries manifest + CCDA zip
@@ -684,14 +642,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "trigger_key": trigger_key,
             "batch_id": batch_id
         },
-        # partner_id is also duplicated at the top level (below) as a
-        # convenience field for consumers that don't want to dig into
-        # the nested "partner" object just to filter/route by partner.
         "partner_id": partner_context.get("partner_id"),
-        # partner_id/partner_batch_key/environment/partner_name are
-        # resolved once per batch in build_metadata_messages() and
-        # handed to the database insertion Lambda so it no longer needs
-        # its own partner_registry / partner_contact_details lookup.
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -756,9 +707,6 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "trigger_key": trigger_key,
             "batch_id": batch_id
         },
-        # partner_id is also duplicated at the top level (below) as a
-        # convenience field for consumers that don't want to dig into
-        # the nested "partner" object just to filter/route by partner.
         "partner_id": partner_context.get("partner_id"),
         "partner": partner_context,
         "files": file_metadata,
@@ -772,9 +720,6 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "validation_status": validation_status,
             "ready_for_database_insert": report_matches_manifest
         },
-        # RECEIVED vs DISCLOSURE -- tells the consumer which key set to
-        # expect in patient_received_report.rows (see
-        # extract_received_report_rows / extract_disclosure_report_rows).
         "report_type": batch_type,
         "patient_received_report": {
             "row_count": len(patient_report_rows),
@@ -822,19 +767,10 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             partner_id, partner_batch_key, environment = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
 
-            # Use whichever of the 3 files was actually modified most
-            # recently as the partner_transmission_state "last object
-            # seen" -- more accurate than picking one file type, and
-            # collapses what used to be two separate updates (one from
-            # each SQS message handler) into one.
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: m["last_modified_utc"]) if candidates else manifest_meta
             update_partner_state(cur, partner_id, latest_meta["key"])
 
-            # Only used by clear_breach_flag() if it needs to INSERT a
-            # brand-new partner_schedule row; ignored on the UPDATE/no-op
-            # paths. Floored at 1 second so a very fast invocation never
-            # seeds the NOT NULL column with 0.
             elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
             expected_interval_seconds = max(1, int(round(elapsed_seconds)))
 
@@ -943,9 +879,6 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type)
         return None
 
-    # The full matching trio is here for the first time -- fetch S3
-    # metadata for all 3 files once, up front, and reuse it for the
-    # partner-state/breach-flag sync as well as both SQS messages.
     manifest_meta = get_object_metadata(bucket, manifest_key)
     report_meta = get_object_metadata(bucket, report_key)
     zip_meta = get_object_metadata(bucket, zip_key)
@@ -959,8 +892,6 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         manifest_expected_counts.get("REPORT", 0),
     )
 
-    # "The correct pair of files was uploaded" -- resolve the partner,
-    # update partner_transmission_state, and clear the breach flag here.
     partner_context = sync_partner_state_and_breach_flag(
         bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start
     )
@@ -974,9 +905,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     return manifest_message, report_message, manifest_key
 
 
-# ============================================================
 # SQS SENDER
-# ============================================================
 def send_metadata_to_sqs(message):
     """Send a metadata message to SQS."""
     message_body = json.dumps(message, default=str)
@@ -1030,9 +959,6 @@ def send_metadata_to_sqs(message):
         unit="Bytes"
     )
 
-    # Partner-dimensioned monitoring -- this used to be emitted by the
-    # database insertion Lambda once it had looked up the partner; now
-    # the partner is already resolved by the time this message is built.
     partner_name = message.get("partner", {}).get("partner_name")
     if partner_name:
         put_metric(
@@ -1054,9 +980,7 @@ def send_metadata_to_sqs(message):
     return response
 
 
-# ============================================================
 # CLOUDWATCH METRICS
-# ============================================================
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
     """Send CloudWatch metric."""
     try:
@@ -1071,9 +995,7 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
         logger.warning("Failed to publish CloudWatch metric %s: %s", metric_name, e)
 
 
-# ============================================================
 # MAIN OBJECT PROCESSOR
-# ============================================================
 def process_object(bucket, key, record):
     """Process a single S3 object."""
     filename = os.path.basename(key)
@@ -1132,9 +1054,7 @@ def process_object(bucket, key, record):
     }
 
 
-# ============================================================
 # LAMBDA ENTRY
-# ============================================================
 def lambda_handler(event, context):
     """Main Lambda handler."""
     records = event.get("Records", [])
@@ -1173,11 +1093,6 @@ def lambda_handler(event, context):
                     {"Name": "Status", "Value": "Failure"}
                 ]
             )
-            # Same pattern as lambda_tables_generator.py: instead of a
-            # bare raise (which just falls through to native SQS/S3
-            # retry/DLQ behavior), hand the failure to the retry_utils
-            # layer and return 202 so the invocation itself is reported
-            # as handled.
             invoke_retry_handler(e, event)
             return {
                 "statusCode": 202,
