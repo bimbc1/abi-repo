@@ -12,7 +12,6 @@ DB_HOST       = os.environ["DB_HOST"]
 DB_PORT       = os.environ.get("DB_PORT", 5432)
 DB_NAME       = os.environ["DB_NAME"]
 AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
-
 METADATA_PROCESSING_QUEUE_NAME = os.environ.get("METADATA_PROCESSING_QUEUE_NAME")
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
@@ -37,8 +36,8 @@ def get_conn():
             database=DB_NAME,
             user=creds["username"],
             password=creds["password"],
-            sslmode="require",
-            connect_timeout=10,
+            ssl_context=True,
+            timeout=10,
         )
     except Exception as e:
         put_metric("LambdaRetries")
@@ -71,8 +70,6 @@ def get_metadata_processing_queue_url():
         raise RuntimeError("METADATA_PROCESSING_QUEUE_NAME environment variable is not configured")
     response = sqs.get_queue_url(QueueName=METADATA_PROCESSING_QUEUE_NAME)
     return response["QueueUrl"]
-
-
 def process_sqs_queue_messages():
     queue_url = get_metadata_processing_queue_url()
     processed_count = 0
@@ -109,16 +106,15 @@ def process_sqs_queue_messages():
             processed_count += 1
             logger.info("Deleted processed SQS message_id=%s", message_id)
     return processed_count
-
-def upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file_name, expected, actual, discrepancy, now):
+def upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file_name, expected, actual, discrepancy, now, ingestion_method):
     cur.execute(
         """
         INSERT INTO manifest_batch (
             partner_id, batch_id, partner_batch_key,
             manifest_file_count, actual_file_count, count_discrepancy,
             submission_timestamp, created_at, updated_at,
-            file_name
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            file_name, ingestion_method
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         ON CONFLICT (partner_id, batch_id, file_name)
         DO UPDATE SET
             partner_batch_key    = EXCLUDED.partner_batch_key,
@@ -126,12 +122,13 @@ def upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file
             actual_file_count    = EXCLUDED.actual_file_count,
             count_discrepancy    = EXCLUDED.count_discrepancy,
             submission_timestamp = EXCLUDED.submission_timestamp,
-            updated_at           = EXCLUDED.updated_at
+            updated_at           = EXCLUDED.updated_at,
+            ingestion_method     = EXCLUDED.ingestion_method
         """,
         (partner_id, batch_id,
          (str(partner_batch_key) if partner_batch_key is not None else None),
          expected, actual, discrepancy, now, now, now,
-         file_name),
+         file_name, ingestion_method),
     )
 # ---- DB FUNCTION: UPSERT MANIFEST METADATA ----
 def upsert_manifest_metadata(message):
@@ -140,6 +137,7 @@ def upsert_manifest_metadata(message):
     counts  = message.get("counts", {})
     files   = message.get("files", {})
     report_type = message.get("report_type")
+    ingestion_method  = message.get("ingestion_method")
     batch_id          = source.get("batch_id")
     partner_id        = partner.get("partner_id")
     partner_batch_key = partner.get("partner_batch_key")
@@ -155,7 +153,7 @@ def upsert_manifest_metadata(message):
     logger.info("batch_id=%s expected=%s actual=%s discrepancy=%s",
                 batch_id, expected, actual, discrepancy)
     cur = conn.cursor()
-    upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file_name, expected, actual, discrepancy, now)
+    upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file_name, expected, actual, discrepancy, now, ingestion_method)
     rows = message.get("patient_received_report", {}).get("rows", [])
     if rows:
         cur.execute(
@@ -226,6 +224,7 @@ def upsert_patient_report_metadata(message):
     files   = message.get("files", {})
     counts  = message.get("counts", {})
     report_type       = message.get("report_type")
+    ingestion_method  = message.get("ingestion_method")
     batch_id          = source.get("batch_id")
     partner_id        = partner.get("partner_id")
     partner_batch_key = partner.get("partner_batch_key")
@@ -234,17 +233,15 @@ def upsert_patient_report_metadata(message):
     file_name         = files.get("report", {}).get("file_name")
     if not partner_id:
         raise ValueError(f"partner_id missing from message for batch_id={batch_id}")
-
     expected    = counts.get("manifest_expected_count", 0)
     actual      = counts.get("report_actual_count", 0)
     discrepancy = counts.get("count_discrepancy", abs((actual or 0) - (expected or 0)))
     now         = datetime.now(timezone.utc)
     cur = conn.cursor()
-    upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file_name, expected, actual, discrepancy, now)
+    upsert_manifest_batch_row(cur, partner_id, batch_id, partner_batch_key, file_name, expected, actual, discrepancy, now, ingestion_method)
     conn.commit()
     logger.info("Upserted manifest_batch (report) batch_id=%s file_name=%s expected=%s actual=%s",
                 batch_id, file_name, expected, actual)
-
     rows = message.get("patient_received_report", {}).get("rows", [])
     if not rows:
         logger.info("No patient rows in message for batch_id=%s skipping", batch_id)
