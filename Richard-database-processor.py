@@ -70,6 +70,8 @@ def get_metadata_processing_queue_url():
         raise RuntimeError("METADATA_PROCESSING_QUEUE_NAME environment variable is not configured")
     response = sqs.get_queue_url(QueueName=METADATA_PROCESSING_QUEUE_NAME)
     return response["QueueUrl"]
+
+
 def process_sqs_queue_messages():
     queue_url = get_metadata_processing_queue_url()
     processed_count = 0
@@ -167,8 +169,6 @@ def upsert_manifest_metadata(message):
                 edipi_value = int(r["edipi"])
             except (KeyError, TypeError, ValueError):
                 continue
-            # FIX: "role" means different source columns depending on
-            # report_type -- User_Role for RECEIVED, Role for DISCLOSURE.
             if report_type == "RECEIVED":
                 user_role_value = r.get("role")
                 role_value = None
@@ -233,6 +233,7 @@ def upsert_patient_report_metadata(message):
     file_name         = files.get("report", {}).get("file_name")
     if not partner_id:
         raise ValueError(f"partner_id missing from message for batch_id={batch_id}")
+
     expected    = counts.get("manifest_expected_count", 0)
     actual      = counts.get("report_actual_count", 0)
     discrepancy = counts.get("count_discrepancy", abs((actual or 0) - (expected or 0)))
@@ -242,6 +243,7 @@ def upsert_patient_report_metadata(message):
     conn.commit()
     logger.info("Upserted manifest_batch (report) batch_id=%s file_name=%s expected=%s actual=%s",
                 batch_id, file_name, expected, actual)
+
     rows = message.get("patient_received_report", {}).get("rows", [])
     if not rows:
         logger.info("No patient rows in message for batch_id=%s skipping", batch_id)
