@@ -16,6 +16,7 @@ logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
 METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
 
+
 DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
 DB_HOST = os.environ["DB_HOST"]
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
@@ -35,6 +36,13 @@ PROCESSING_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
     "PROCESSING_FAILURE_MESSAGE_TEMPLATE",
     "Metadata processing failed. Bucket: {bucket} Batch ID: {batch_id} Partner: {partner_name} Error: {error}"
 )
+
+try:
+    INGESTION_METHOD_ARN_MARKERS = json.loads(os.environ.get("INGESTION_METHOD_ARN_MARKERS", "{}"))
+except (TypeError, ValueError):
+    logger.warning("INGESTION_METHOD_ARN_MARKERS is not valid JSON; ignoring it.")
+    INGESTION_METHOD_ARN_MARKERS = {}
+INGESTION_METHOD_DEFAULT = os.environ.get("INGESTION_METHOD_DEFAULT", "DIRECT_S3")
 
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
@@ -70,6 +78,27 @@ def utc_now_iso():
 def extract_batch_id(filename):
     parts = filename.split("_")
     return "_".join(parts[:2])
+
+
+def detect_ingestion_method(record):
+    """Classify how this object arrived in S3, using the S3 event
+    record's userIdentity.arn (the IAM principal that performed the
+    PutObject). Transfer Family writes as its configured access role;
+    another API/script would show up as whatever role/user it assumed.
+    INGESTION_METHOD_ARN_MARKERS maps a substring of that ARN to a
+    label -- the first match wins. Falls back to
+    INGESTION_METHOD_DEFAULT when nothing matches or the event has no
+    userIdentity.arn."""
+    arn = (record.get("userIdentity") or {}).get("arn") or ""
+    for marker, label in INGESTION_METHOD_ARN_MARKERS.items():
+        if marker and marker in arn:
+            return label
+    if not arn:
+        logger.warning(
+            "S3 event record has no userIdentity.arn; defaulting ingestion_method to %s",
+            INGESTION_METHOD_DEFAULT
+        )
+    return INGESTION_METHOD_DEFAULT
 
 
 # FILE NAME MATCHING
@@ -210,6 +239,7 @@ def mark_batch_as_sent(bucket, manifest_key):
         )
     except Exception as e:
         logger.warning("Could not tag %s as sent: %s", manifest_key, e)
+
 
 # DATABASE HELPERS
 def get_conn():
@@ -612,7 +642,7 @@ def extract_disclosure_report_rows(bucket, key):
 
 # SQS MESSAGE BUILDERS
 def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta, zip_meta,
-                                     manifest_expected_counts, partner_context):
+                                     manifest_expected_counts, partner_context, ingestion_method):
     """Build the SQS message that carries manifest + CCDA zip
     validation info. No patient-level data goes in this message."""
     zip_actual_count = count_zip(bucket, zip_meta["key"])
@@ -643,6 +673,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
+        "ingestion_method": ingestion_method,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -666,7 +697,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
 
 
 def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_type, report_meta,
-                                           manifest_expected_counts, partner_context):
+                                           manifest_expected_counts, partner_context, ingestion_method):
     """Build the SQS message that carries the patient report validation
     info and the patient-level rows.
 
@@ -708,6 +739,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
+        "ingestion_method": ingestion_method,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -821,14 +853,16 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     }
 
 
-def build_metadata_messages(bucket, trigger_key, processing_start):
+def build_metadata_messages(bucket, trigger_key, processing_start, ingestion_method):
     """Build both metadata messages (manifest/zip validation and
     patient report) for a batch. Returns None if the triggering file
     isn't a recognized batch type, the batch isn't ready yet (missing
     a same-type file), or the batch was already sent.
 
     processing_start is passed straight through to
-    sync_partner_state_and_breach_flag() -- see its docstring."""
+    sync_partner_state_and_breach_flag() -- see its docstring.
+    ingestion_method is passed straight through to both SQS message
+    builders -- see detect_ingestion_method()."""
     filename = os.path.basename(trigger_key)
     batch_id = extract_batch_id(filename)
 
@@ -897,10 +931,10 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     )
 
     manifest_message = build_manifest_metadata_message(
-        bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context
+        bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context, ingestion_method
     )
     report_message = build_patient_report_metadata_message(
-        bucket, trigger_key, batch_id, batch_type, report_meta, manifest_expected_counts, partner_context
+        bucket, trigger_key, batch_id, batch_type, report_meta, manifest_expected_counts, partner_context, ingestion_method
     )
     return manifest_message, report_message, manifest_key
 
@@ -958,7 +992,6 @@ def send_metadata_to_sqs(message):
         value=message["metrics"]["bytes_in"],
         unit="Bytes"
     )
-
     partner_name = message.get("partner", {}).get("partner_name")
     if partner_name:
         put_metric(
@@ -1022,7 +1055,10 @@ def process_object(bucket, key, record):
         logger.info("Skipping non-target file: %s", filename)
         return {"processed": False, "reason": "NON_TARGET_FILE"}
 
-    result = build_metadata_messages(bucket, key, processing_start)
+    ingestion_method = detect_ingestion_method(record)
+    logger.info("Detected ingestion_method=%s for key=%s", ingestion_method, key)
+
+    result = build_metadata_messages(bucket, key, processing_start, ingestion_method)
     if result is None:
         return {"processed": False, "reason": "BATCH_NOT_READY_OR_ALREADY_SENT"}
     manifest_message, report_message, manifest_key = result
