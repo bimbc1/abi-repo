@@ -223,14 +223,16 @@ def upsert_patient_report_metadata(message):
     partner = message.get("partner", {})
     files   = message.get("files", {})
     counts  = message.get("counts", {})
-    report_type       = message.get("report_type")
+    report_type       = message.get("report_type").
     ingestion_method  = message.get("ingestion_method")
+    manifest_companion_mapping = message.get("manifest_companion_mapping")
     batch_id          = source.get("batch_id")
     partner_id        = partner.get("partner_id")
     partner_batch_key = partner.get("partner_batch_key")
     environment       = partner.get("environment")
     partner_name      = partner.get("partner_name")
     file_name         = files.get("report", {}).get("file_name")
+    # ← reads file_name from files.report.file_name
     if not partner_id:
         raise ValueError(f"partner_id missing from message for batch_id={batch_id}")
 
@@ -277,8 +279,9 @@ def upsert_patient_report_metadata(message):
                 document_format_code, document_loinc_code, document_id,
                 repository_id, source_id, ccda_file_name,
                 receiving_organization, partner,
-                user_id, user_name, role, role_code, commonwell_indicator
-            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                user_id, user_name, role, role_code, commonwell_indicator,
+                manifest_companion_mapping
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             (partner_id, batch_id, environment, file_name, edipi_value,
              r.get("last_name"), r.get("first_name"),
@@ -300,7 +303,8 @@ def upsert_patient_report_metadata(message):
              r.get("user_id"),
              r.get("user_name"),
              role_value, r.get("role_code"),
-             r.get("commonwell_indicator")),
+             r.get("commonwell_indicator"),
+             manifest_companion_mapping),
         )
         inserted += 1
     conn.commit()
