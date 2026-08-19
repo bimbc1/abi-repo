@@ -118,6 +118,7 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS patient_details (
             partner_id UUID NOT NULL,
