@@ -696,7 +696,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
     }
 
 
-def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_type, report_meta,
+def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta,
                                            manifest_expected_counts, partner_context, ingestion_method):
     """Build the SQS message that carries the patient report validation
     info and the patient-level rows.
@@ -740,6 +740,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": ingestion_method,
+        "manifest_companion_mapping": manifest_meta["file_name"],
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -934,7 +935,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start, ingestion_met
         bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context, ingestion_method
     )
     report_message = build_patient_report_metadata_message(
-        bucket, trigger_key, batch_id, batch_type, report_meta, manifest_expected_counts, partner_context, ingestion_method
+        bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta, manifest_expected_counts, partner_context, ingestion_method
     )
     return manifest_message, report_message, manifest_key
 
