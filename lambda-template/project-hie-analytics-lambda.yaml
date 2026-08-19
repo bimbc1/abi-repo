@@ -165,6 +165,11 @@ Resources:
           SNS_TOPIC_ARN: 
             Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
           SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
+          DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE: |
+            {partner_name} manifest metadata processing has failed due to a database connection error.
+            Error: {error}
+            "WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
+
           RESUMED_MESSAGE_TEMPLATE: |
             {partner_name} file delivery has resumed and files are being received successfully.
 
