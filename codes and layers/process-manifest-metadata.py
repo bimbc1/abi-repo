@@ -36,6 +36,10 @@ PROCESSING_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
     "PROCESSING_FAILURE_MESSAGE_TEMPLATE",
     "Metadata processing failed. Bucket: {bucket} Batch ID: {batch_id} Partner: {partner_name} Error: {error}"
 )
+DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
+    "DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE",
+    "{partner_name} manifest metadata processing has failed due to a database connection error. Error: {error}"
+)
 
 try:
     INGESTION_METHOD_ARN_MARKERS = json.loads(os.environ.get("INGESTION_METHOD_ARN_MARKERS", "{}"))
@@ -50,6 +54,15 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 sns = boto3.client("sns", region_name=AWS_REGION)
 
+
+class DatabaseConnectionError(Exception):
+    """Raised specifically when this Lambda cannot establish a database
+    connection (secret retrieval or psycopg2.connect() failure) in
+    get_conn(). Kept distinct from other exceptions so the caller can
+    tell "couldn't reach the database" apart from any other failure
+    (e.g. a bad query, a missing partner row) and react differently --
+    see sync_partner_state_and_breach_flag() and lambda_handler()."""
+    pass
 
 
 def invoke_retry_handler(error, event):
@@ -268,7 +281,7 @@ def get_conn():
                 value=1
             )
         logger.exception("Database connection failure")
-        raise
+        raise DatabaseConnectionError(str(e)) from e
 
 
 def get_partner_info(cur, bucket_name):
@@ -508,6 +521,38 @@ def send_processing_failure_sns(error, bucket, batch_id, partner_name=None):
         )
     except Exception:
         logger.exception("Failed to send processing failure SNS notification")
+
+
+def send_db_connection_failure_sns(error, partner_name=None):
+    """Send the database-connection-specific failure notification.
+
+    Deliberately NOT called from inside sync_partner_state_and_breach_flag's
+    except block (see there) -- for a DatabaseConnectionError, this is
+    called from lambda_handler(), and only AFTER invoke_retry_handler()
+    has already run for this invocation, per the required order: retry
+    handler first, then this SNS notification.
+    """
+    if not SNS_TOPIC_ARN:
+        logger.warning("SNS_TOPIC_ARN is not configured. Skipping database connection failure SNS.")
+        return
+    try:
+        message = DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE.format(
+            partner_name=partner_name or "Unknown",
+            error=str(error)
+        )
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject="Database Connection Failure - Manifest Metadata Lambda",
+            Message=message,
+        )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="DatabaseConnectionFailureNotificationsSent",
+            value=1
+        )
+        logger.info("Database connection failure SNS notification sent")
+    except Exception:
+        logger.exception("Failed to send database connection failure SNS notification")
 
 
 # FILE VALIDATION AND COUNTING
@@ -829,7 +874,8 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             bucket,
             batch_id
         )
-        send_processing_failure_sns(error=e, bucket=bucket, batch_id=batch_id, partner_name=partner_name)
+        if not isinstance(e, DatabaseConnectionError):
+            send_processing_failure_sns(error=e, bucket=bucket, batch_id=batch_id, partner_name=partner_name)
         raise
     finally:
         if conn:
@@ -1131,6 +1177,8 @@ def lambda_handler(event, context):
                 ]
             )
             invoke_retry_handler(e, event)
+            if isinstance(e, DatabaseConnectionError):
+                send_db_connection_failure_sns(error=e)
             return {
                 "statusCode": 202,
                 "body": json.dumps({
