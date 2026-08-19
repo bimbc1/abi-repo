@@ -118,17 +118,13 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
-
-    # NOTE: purpose_of_use / purpose_of_use_code added -- both the
-    # PatientReceivedReport and PatientDisclosureReport files carry
-    # Purpose_of_Use and Purpose_of_Use_Code columns, but this table had
-    # no matching columns for either one before this change.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS patient_details (
             partner_id UUID NOT NULL,
             batch_id TEXT NOT NULL,
             environment VARCHAR(20) NOT NULL,
             file_name TEXT,
+            manifest_companion_mapping TEXT,
             edipi BIGINT NOT NULL,
             SSN VARCHAR(11),
             patient_last_name VARCHAR(100) NOT NULL,
