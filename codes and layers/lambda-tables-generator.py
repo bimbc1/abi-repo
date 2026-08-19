@@ -12,7 +12,7 @@ logger.setLevel(logging.INFO)
 DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
 DB_HOST = os.environ["DB_HOST"]
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME = os.environ.get("DB_NAME", "ccda02")
+DB_NAME = os.environ.get("DB_NAME", "ccda01")
 AWS_REGION = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
 
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
