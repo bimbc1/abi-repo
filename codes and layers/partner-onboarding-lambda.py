@@ -16,6 +16,7 @@ DB_HOST = os.environ["DB_HOST"]
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "ccda01")
 AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
+PARTNER_1_BUCKET_ARN = os.environ["PARTNER_1_BUCKET"]
 
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 s3 = boto3.client("s3")
@@ -143,8 +144,7 @@ def lambda_handler(event, context):
 
             # 🔥 STEP 1: CREATE partner_registry
             bucket_arns = [
-                "arn:aws-us-gov:s3:::project-hie-analytics-cdq-stg-oraclehealth-documents-tf-2025",
-                "arn:aws-us-gov:s3:::project-hie-analytics-cdq-dev-epichealth-documents-tf-2025"
+                PARTNER_1_BUCKET_ARN
             ]
 
             environment = os.environ.get("ENVIRONMENT")
@@ -187,18 +187,11 @@ def lambda_handler(event, context):
 
             partners = [
                 {
-                    "s3_bucket_arn": "arn:aws-us-gov:s3:::project-hie-analytics-cdq-stg-oraclehealth-documents-tf-2025",
+                    "s3_bucket_arn": PARTNER_1_BUCKET_ARN,
                     "partner_name": "Oracle Health",
                     "contact_person": "Abim",
                     "contact_email": "abim@oracle.com",
                     "contact_phone": "1234567890",
-                },
-                {
-                    "s3_bucket_arn": "arn:aws-us-gov:s3:::project-hie-analytics-cdq-dev-epichealth-documents-tf-2025",
-                    "partner_name": "Epic Health",
-                    "contact_person": "Abim",
-                    "contact_email": "abimbola@gmail.com",
-                    "contact_phone": "123454321",
                 },
             ]
 
