@@ -14,13 +14,6 @@ logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 
 AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
-METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
-
-
-DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
-DB_HOST = os.environ["DB_HOST"]
-DB_PORT = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME = os.environ.get("DB_NAME", "ccda01")
 
 SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
 SNS_SUBJECT_TEMPLATE = os.environ.get(
@@ -40,19 +33,58 @@ DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
     "DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE",
     "{partner_name} manifest metadata processing has failed due to a database connection error. Error: {error}"
 )
+CONFIG_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
+    "CONFIG_FAILURE_MESSAGE_TEMPLATE",
+    "Manifest metadata Lambda failed to initialize due to a configuration error (this happened before "
+    "the Lambda could process any records). Error: {error}"
+)
+
+sns = boto3.client("sns", region_name=AWS_REGION)
+
+
+def _notify_config_failure(error):
+    """Best-effort SNS notification for a failure that happens while this
+    module is being imported/initialized, before lambda_handler() ever
+    gets a chance to run. Deliberately self-contained (doesn't depend on
+    anything defined later in this file) and never raises on its own --
+    any failure here is logged and swallowed so the caller's re-raise of
+    the ORIGINAL error is what actually surfaces to Lambda."""
+    if not SNS_TOPIC_ARN:
+        logger.warning("SNS_TOPIC_ARN is not configured. Skipping configuration failure SNS.")
+        return
+    try:
+        sns.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Subject="Configuration Failure - Manifest Metadata Lambda",
+            Message=CONFIG_FAILURE_MESSAGE_TEMPLATE.format(error=str(error)),
+        )
+        logger.info("Configuration failure SNS notification sent")
+    except Exception:
+        logger.exception("Failed to send configuration failure SNS notification")
+
 
 try:
-    INGESTION_METHOD_ARN_MARKERS = json.loads(os.environ.get("INGESTION_METHOD_ARN_MARKERS", "{}"))
-except (TypeError, ValueError):
-    logger.warning("INGESTION_METHOD_ARN_MARKERS is not valid JSON; ignoring it.")
-    INGESTION_METHOD_ARN_MARKERS = {}
-INGESTION_METHOD_DEFAULT = os.environ.get("INGESTION_METHOD_DEFAULT", "DIRECT_S3")
+    METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
 
-s3 = boto3.client("s3")
-sqs = boto3.client("sqs", region_name=AWS_REGION)
-cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
-sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-sns = boto3.client("sns", region_name=AWS_REGION)
+    DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
+    DB_HOST = os.environ["DB_HOST"]
+    DB_PORT = int(os.environ.get("DB_PORT", "5432"))
+    DB_NAME = os.environ.get("DB_NAME", "ccda01")
+
+    try:
+        INGESTION_METHOD_ARN_MARKERS = json.loads(os.environ.get("INGESTION_METHOD_ARN_MARKERS", "{}"))
+    except (TypeError, ValueError):
+        logger.warning("INGESTION_METHOD_ARN_MARKERS is not valid JSON; ignoring it.")
+        INGESTION_METHOD_ARN_MARKERS = {}
+    INGESTION_METHOD_DEFAULT = os.environ.get("INGESTION_METHOD_DEFAULT", "DIRECT_S3")
+
+    s3 = boto3.client("s3")
+    sqs = boto3.client("sqs", region_name=AWS_REGION)
+    cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
+    sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+except Exception as e:
+    _notify_config_failure(e)
+    raise
 
 
 class DatabaseConnectionError(Exception):
@@ -1179,6 +1211,13 @@ def lambda_handler(event, context):
             invoke_retry_handler(e, event)
             if isinstance(e, DatabaseConnectionError):
                 send_db_connection_failure_sns(error=e)
+            else:
+                try:
+                    failure_key = key
+                except UnboundLocalError:
+                    failure_key = unquote_plus(record.get("s3", {}).get("object", {}).get("key") or "")
+                batch_id = extract_batch_id(os.path.basename(failure_key)) if failure_key else "unknown"
+                send_processing_failure_sns(error=e, bucket=bucket, batch_id=batch_id)
             return {
                 "statusCode": 202,
                 "body": json.dumps({
