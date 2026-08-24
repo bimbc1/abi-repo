@@ -84,46 +84,6 @@ def get_conn():
         raise
 
 
-def append_to_s3_csv(partner_name, partner_id, bucket_arn, environment):
-    bucket_name = "project-hie-analytics-cdq-dev-admin-registry"
-    key = "Mapping.csv"
-
-    try:
-        response = s3.get_object(Bucket=bucket_name, Key=key)
-        existing_data = response["Body"].read().decode("utf-8")
-
-        csv_buffer = io.StringIO(existing_data)
-        reader = list(csv.reader(csv_buffer))
-
-        for row in reader[1:]:
-            if len(row) > 1 and row[1] == str(partner_id):
-                logger.info("Partner already exists in CSV, skipping append")
-                return
-
-        writer_buffer = io.StringIO()
-        writer = csv.writer(writer_buffer)
-        writer.writerows(reader)
-        writer.writerow([partner_name, partner_id, environment])
-
-    except ClientError as e:
-        if e.response["Error"]["Code"] == "NoSuchKey":
-            writer_buffer = io.StringIO()
-            writer = csv.writer(writer_buffer)
-            writer.writerow(["partner_name", "partner_id", "environment"])
-            writer.writerow([partner_name, partner_id, environment])
-        else:
-            raise
-
-    s3.put_object(
-        Bucket=bucket_name,
-        Key=key,
-        Body=writer_buffer.getvalue(),
-        ContentType="text/csv"
-    )
-
-    logger.info(f"Mapping.csv updated in {bucket_name}")
-
-
 def lambda_handler(event, context):
     logger.info("Running partner contact insert lambda (final + schedule)")
 
@@ -266,12 +226,6 @@ def lambda_handler(event, context):
                         VALUES (%s, %s);
                     """, (partner_id, 1800))
 
-                append_to_s3_csv(
-                    partner_name=p["partner_name"],
-                    partner_id=partner_id,
-                    bucket_arn=p["s3_bucket_arn"],
-                    environment=environment
-                )
 
         conn.commit()
 
