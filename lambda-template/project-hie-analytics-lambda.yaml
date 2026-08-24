@@ -48,7 +48,7 @@ Resources:
   RetryHandlerLayer:
     Type: AWS::Lambda::LayerVersion
     Properties:
-      LayerName: !Sub project-hie-analytics-cdq-${Env}-retry-backoff
+      LayerName: !Sub project-hie-analytics-retry-backoff-${Env}
       Description: Retry/backoff handler layer
       CompatibleRuntimes:
         - python3.14
