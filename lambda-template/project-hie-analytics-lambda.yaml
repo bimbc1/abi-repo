@@ -173,8 +173,7 @@ Resources:
           RESUMED_MESSAGE_TEMPLATE: |
             {partner_name} file delivery has resumed and files are being received successfully.
 
-          WARNING_INFO: "WARNING!! This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."         
-          
+          WARNING_INFO: "WARNING!! This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."             
 
       VpcConfig:
         SubnetIds:
@@ -183,65 +182,7 @@ Resources:
         SecurityGroupIds:
           - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
 
-
-  # LAMBDA 3: PROCESS INSERTION LAMBDA
-  ProcessInsertionLambda:
-    Type: AWS::Lambda::Function
-    Properties:
-      Tags:
-        - Key: tenant:CKID
-          Value: "2598"
-        - Key: tenant:VAECID
-          Value: "AWG20251201001"
-        - Key: va_vasi_id
-          Value: "2238"
-      FunctionName: !Sub project-hie-analytics-process-insertion-lambda-${Env}
-      Role: !ImportValue 
-        Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
-      Runtime: python3.14
-      Handler: index.lambda_handler
-      MemorySize: 1024
-      Timeout: 300
-
-      Code:
-        ZipFile: |
-          import json
-          import psycopg2
-          import os
-          import boto3
-
-          def lambda_handler(event, context):
-
-              secret_arn = os.environ['DB_SECRET_ARN']
-              host = os.environ['DB_HOST']
-
-              return {
-                  "statusCode": 200,
-                  "body": json.dumps("Lambda working with psycopg2 layer")
-              }     
-
-      Layers:
-        - !Ref Psycopg2Layer
-        - !Ref RetryHandlerLayer
-
-      Environment:
-        Variables:
-          DB_SECRET_ARN: !ImportValue 
-            Fn::Sub: project-hie-analytics-rds-secret-arn-${Env}
-          DB_HOST: !ImportValue 
-            Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
-          DB_NAME: !ImportValue 
-            Fn::Sub: RDSDBName-${Env}
-          ENVIRONMENT: !Ref Env
-
-      VpcConfig:
-        SubnetIds:
-          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
-          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId2]
-        SecurityGroupIds:
-          - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
- 
-Outputs:
+ Outputs:
 
   ProcessTableGeneratorLambdaArn:
     Value: !GetAtt ProcessTableGeneratorLambda.Arn
@@ -252,8 +193,3 @@ Outputs:
     Value: !GetAtt ProcessPayloadManifestLambda.Arn
     Export:
       Name: !Sub project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
-
-  ProcessInsertionLambdaArn:
-    Value: !GetAtt ProcessInsertionLambda.Arn
-    Export:
-      Name: !Sub project-hie-analytics-process-insertion-lambda-arn-${Env}
