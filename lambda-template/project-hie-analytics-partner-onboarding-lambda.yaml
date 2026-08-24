@@ -55,3 +55,71 @@ Resources:
       Content:
         S3Bucket: demo-bucket-idn
         S3Key: project-hie-analytics-retry-backoff.zip
+
+  # LAMBDA 1: PROCESS INSERTION LAMBDA
+  ProcessInsertionLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      FunctionName: !Sub project-hie-analytics-process-partner-onboarding-lambda-${Env}
+      Role: !ImportValue 
+        Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
+      Runtime: python3.14
+      Handler: index.lambda_handler
+      MemorySize: 1024
+      Timeout: 300
+
+      Code:
+        ZipFile: |
+          import json
+          import psycopg2
+          import os
+          import boto3
+
+          def lambda_handler(event, context):
+
+              secret_arn = os.environ['DB_SECRET_ARN']
+              host = os.environ['DB_HOST']
+
+              return {
+                  "statusCode": 200,
+                  "body": json.dumps("Lambda working with psycopg2 layer")
+              }     
+
+      Layers:
+        - !Ref Psycopg2Layer
+        - !Ref RetryHandlerLayer
+
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !ImportValue 
+            Fn::Sub: project-hie-analytics-rds-secret-arn-${Env}
+          DB_HOST: !ImportValue 
+            Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
+          DB_NAME: !ImportValue 
+            Fn::Sub: RDSDBName-${Env}
+          ENVIRONMENT: !Ref Env
+          PARTNER_1_BUCKET: !ImportValue
+            Fn::Sub: OracleDocumentUploadsBucketArn-${Env}
+
+      VpcConfig:
+        SubnetIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId2]
+        SecurityGroupIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
+
+
+Outputs:
+
+  ProcessInsertionLambdaArn:
+    Value: !GetAtt ProcessInsertionLambda.Arn
+    Export:
+      Name: !Sub process-insertion-lambda-arn-${Env}
+
