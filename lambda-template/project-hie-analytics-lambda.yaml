@@ -168,7 +168,7 @@ Resources:
           DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE: |
             {partner_name} manifest metadata processing has failed due to a database connection error.
             Error: {error}
-            "WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
+          WARNING_INFO:  "WARNING!! This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
 
           RESUMED_MESSAGE_TEMPLATE: |
             {partner_name} file delivery has resumed and files are being received successfully.
@@ -182,7 +182,7 @@ Resources:
         SecurityGroupIds:
           - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
 
- Outputs:
+Outputs:
 
   ProcessTableGeneratorLambdaArn:
     Value: !GetAtt ProcessTableGeneratorLambda.Arn
