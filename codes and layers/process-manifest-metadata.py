@@ -632,7 +632,7 @@ def extract_received_report_rows(bucket, key):
         Source_ID|CCDA_File_Name
 
     -- 15 pipe-delimited fields. SSN (index 3) is intentionally parsed and
-    then dropped: patient_details.SSM is CHECK-constrained to always be
+    then dropped: patient_details.SSN is CHECK-constrained to always be
     the literal 'Null', so the real SSN is never persisted downstream.
     """
     obj = s3.get_object(Bucket=bucket, Key=key)
