@@ -64,13 +64,12 @@ def get_conn():
         creds = get_db_credentials()
 
         return psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
+            host=creds["host"],
+            port=creds["port"],
+            dbname=creds["dbname"],
             user=creds["username"],
             password=creds["password"],
-            sslmode="require",
-            connect_timeout=10,
+            sslmode=creds["sslmode"],
         )
 
     except Exception as e:
