@@ -217,7 +217,7 @@ Outputs:
   LambdaInsertionRoleArn:
     Value: !GetAtt IAMRolehieInsertionLambdaFullAccess.Arn
     Export:
-      Name: !Sub LambdaInsertionRoleArn-${Env}
+      Name: !Sub project-hie-analytics-lambda-insertion-role-arn-${Env}
 
   EC2SSMRoleArn:
     Value: !GetAtt IAMRolehieEC2SSMSessionRole.Arn
