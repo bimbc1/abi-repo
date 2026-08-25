@@ -125,7 +125,7 @@ Resources:
           Value: "2238"
       FunctionName: !Sub project-hie-analytics-process-payload-manifest-metadata-${Env}
       Role: !ImportValue 
-        Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
+        Fn::Sub: project-hie-analytics-lambda-insertion-role-arn-${Env}
       Runtime: python3.14
       Handler: index.lambda_handler
       MemorySize: 1024
