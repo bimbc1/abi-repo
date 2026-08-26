@@ -175,6 +175,8 @@ def ensure_tables(cur):
         CREATE TABLE IF NOT EXISTS partner_schedule (
             schedule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             partner_id UUID NOT NULL,
+            failure_type   TEXT,
+            last_alert_at  TIMESTAMPTZ NOT NULL,
             expected_interval_seconds INTEGER NOT NULL,
             breach_flag BOOLEAN DEFAULT FALSE,
             last_breach_email_sent_at TIMESTAMPTZ,
