@@ -104,6 +104,16 @@ Resources:
             Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
+          ALERT_COOLDOWN_SECONDS: "3600"
+          SNS_TOPIC_ARN: !ImportValue 
+            Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
+          FAILURE_MESSAGE_TYPE: |
+            Manifest metadata processing has failed due to a {failure_type}.
+            Error: {error}
+            
+            "WARNING_INFO: WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
+
+
 
       VpcConfig:
         SubnetIds:
@@ -165,6 +175,14 @@ Resources:
           SNS_TOPIC_ARN: !ImportValue 
             Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
           SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
+          ALERT_COOLDOWN_SECONDS: "3600"
+          FAILURE_MESSAGE_TYPE: |
+            Manifest metadata processing has failed due to a {failure_type}.
+            Error: {error}
+            
+            "WARNING_INFO: WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
+
+
           DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE: |
             {partner_name} manifest metadata processing has failed due to a database connection error.
             Error: {error}
