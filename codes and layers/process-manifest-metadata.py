@@ -2,6 +2,7 @@ import os
 import json
 import io
 import re
+import time
 import zipfile
 import logging
 from datetime import datetime, timezone
@@ -25,14 +26,11 @@ RESUMED_MESSAGE_TEMPLATE = os.environ.get(
     "{partner_name} file delivery has resumed and files are being received successfully in the {environment} environment."
 )
 WARNING_INFO = os.environ.get("WARNING_INFO", "")
-PROCESSING_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
-    "PROCESSING_FAILURE_MESSAGE_TEMPLATE",
-    "Metadata processing failed. Bucket: {bucket} Batch ID: {batch_id} Partner: {partner_name} Error: {error}"
+FAILURE_MESSAGE_TEMPLATE = os.environ.get(
+    "FAILURE_MESSAGE_TYPE",
+    "Manifest metadata processing has failed due to a {failure_type}.\nError: {error}"
 )
-DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
-    "DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE",
-    "{partner_name} manifest metadata processing has failed due to a database connection error. Error: {error}"
-)
+ALERT_COOLDOWN_SECONDS = int(os.environ.get("ALERT_COOLDOWN_SECONDS", "3600"))
 CONFIG_FAILURE_MESSAGE_TEMPLATE = os.environ.get(
     "CONFIG_FAILURE_MESSAGE_TEMPLATE",
     "Manifest metadata Lambda failed to initialize due to a configuration error (this happened before "
@@ -94,6 +92,35 @@ class DatabaseConnectionError(Exception):
     tell "couldn't reach the database" apart from any other failure
     (e.g. a bad query, a missing partner row) and react differently --
     see sync_partner_state_and_breach_flag() and lambda_handler()."""
+    pass
+
+
+class S3RetrievalError(Exception):
+    """Raised when a critical S3 read fails -- the manifest, report, or
+    zip object (or its metadata) could not be retrieved. Distinct from
+    ManifestParsingError, which covers the case where the bytes were
+    retrieved fine but their *content* is malformed."""
+    pass
+
+
+class ManifestParsingError(Exception):
+    """Raised when a manifest or report file was retrieved successfully
+    but its content can't be parsed -- e.g. the manifest has no
+    recognizable counts, the zip can't be opened, or the text isn't
+    valid UTF-8."""
+    pass
+
+
+class PartnerMappingError(Exception):
+    """Raised when the S3 bucket that triggered this Lambda has no
+    corresponding row in partner_registry -- i.e. the database was
+    reachable, but this bucket isn't mapped to any partner."""
+    pass
+
+
+class SQSPublishError(Exception):
+    """Raised when publishing a metadata message to the downstream SQS
+    queue fails."""
     pass
 
 
@@ -245,7 +272,10 @@ def get_object_metadata(bucket, key):
     """Get metadata for an S3 object."""
     if not key:
         return None
-    head = s3.head_object(Bucket=bucket, Key=key)
+    try:
+        head = s3.head_object(Bucket=bucket, Key=key)
+    except Exception as e:
+        raise S3RetrievalError(f"Failed to retrieve metadata for {key!r} in bucket {bucket!r}: {e}") from e
     return {
         "key": key,
         "file_name": os.path.basename(key),
@@ -328,7 +358,7 @@ def get_partner_info(cur, bucket_name):
     )
     row = cur.fetchone()
     if not row:
-        raise RuntimeError(f"No partner registered for bucket ARN {bucket_arn}")
+        raise PartnerMappingError(f"No partner registered for bucket ARN {bucket_arn}")
     return row[0], row[1], row[2]
 
 
@@ -433,9 +463,10 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
                 partner_id,
                 expected_interval_seconds,
                 breach_flag,
+                last_alert_at,
                 updated_at
             )
-            VALUES (%s, %s, FALSE, NOW())
+            VALUES (%s, %s, FALSE, NOW(), NOW())
             """,
             (partner_id, expected_interval_seconds),
         )
@@ -525,73 +556,127 @@ def send_recovery_sns(partner_name, partner_id, environment):
         )
 
 
-def send_processing_failure_sns(error, bucket, batch_id, partner_name=None):
+def send_failure_sns(failure_type, error):
+    """Low-level SNS publish for a critical, ingestion-blocking failure.
+    failure_type is a short label (e.g. "DatabaseConnectionError") used in
+    both the email subject and FAILURE_MESSAGE_TEMPLATE. Called only by the
+    category-specific helpers below and by the uncategorized-failure
+    fallback in lambda_handler -- callers that want the cooldown enforced
+    should go through send_failure_alert(), not this function directly."""
     if not SNS_TOPIC_ARN:
-        logger.warning("SNS_TOPIC_ARN is not configured. Skipping processing failure SNS.")
+        logger.warning("SNS_TOPIC_ARN is not configured. Skipping %s notification.", failure_type)
         return
     try:
-        message = PROCESSING_FAILURE_MESSAGE_TEMPLATE.format(
-            bucket=bucket,
-            batch_id=batch_id,
-            partner_name=partner_name or "Unknown",
+        message = FAILURE_MESSAGE_TEMPLATE.format(
+            failure_type=failure_type,
             error=str(error)
         )
+        if WARNING_INFO:
+            message = f"{message}\n\n{WARNING_INFO}"
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
-            Subject="Metadata Processing Failed",
+            Subject=f"{failure_type} - Manifest Metadata Lambda",
             Message=message,
         )
         put_metric(
             namespace="HIE/OperationalMonitoring",
-            metric_name="ProcessingFailureNotificationsSent",
-            value=1
+            metric_name="CriticalFailureNotificationsSent",
+            value=1,
+            dimensions=[{"Name": "FailureType", "Value": failure_type}]
         )
-        logger.info(
-            "Processing failure SNS notification sent for bucket=%s batch_id=%s",
-            bucket,
-            batch_id
-        )
+        logger.info("%s SNS notification sent", failure_type)
     except Exception:
-        logger.exception("Failed to send processing failure SNS notification")
+        logger.exception("Failed to send %s SNS notification", failure_type)
 
 
-def send_db_connection_failure_sns(error, partner_name=None):
-    """Send the database-connection-specific failure notification.
+def send_db_connection_failure_sns(error):
+    send_failure_sns("DatabaseConnectionError", error)
 
-    Deliberately NOT called from inside sync_partner_state_and_breach_flag's
-    except block (see there) -- for a DatabaseConnectionError, this is
-    called from lambda_handler(), and only AFTER invoke_retry_handler()
+
+def send_s3_failure_sns(error):
+    send_failure_sns("S3RetrievalError", error)
+
+
+def send_manifest_parsing_failure_sns(error):
+    send_failure_sns("ManifestParsingError", error)
+
+
+def send_partner_mapping_failure_sns(error):
+    send_failure_sns("PartnerMappingError", error)
+
+
+def send_sqs_failure_sns(error):
+    send_failure_sns("SQSPublishError", error)
+
+
+def _dispatch_failure_sns(failure_type, error):
+    """Route failure_type to its category-specific SNS helper. Anything
+    that isn't one of the 5 classified categories (an unexpected/
+    uncategorized exception) falls through to the generic send_failure_sns()
+    call, so an unanticipated bug can't silently stop alerting altogether."""
+    if failure_type == "DatabaseConnectionError":
+        send_db_connection_failure_sns(error)
+    elif failure_type == "S3RetrievalError":
+        send_s3_failure_sns(error)
+    elif failure_type == "ManifestParsingError":
+        send_manifest_parsing_failure_sns(error)
+    elif failure_type == "PartnerMappingError":
+        send_partner_mapping_failure_sns(error)
+    elif failure_type == "SQSPublishError":
+        send_sqs_failure_sns(error)
+    else:
+        send_failure_sns(failure_type, error)
+
+
+_alert_cooldown_state = {}
+
+
+def get_last_alert_time(failure_type):
+    """Return the last time (as a time.time() timestamp) an SNS alert was
+    sent for this failure_type in this warm container, or None if it
+    hasn't alerted yet here."""
+    return _alert_cooldown_state.get(failure_type)
+
+
+def record_alert_time(failure_type):
+    """Record now() as the last-alert time for this failure_type."""
+    _alert_cooldown_state[failure_type] = time.time()
+
+
+def should_send_alert(failure_type):
+    """True if this failure_type has never alerted in this warm container,
+    or its last alert was more than ALERT_COOLDOWN_SECONDS ago."""
+    last_alert_time = get_last_alert_time(failure_type)
+    if not last_alert_time:
+        return True
+    elapsed = time.time() - last_alert_time
+    return elapsed >= ALERT_COOLDOWN_SECONDS
+
+
+def send_failure_alert(failure_type, error):
+    """Entry point for all critical-failure SNS alerting. Called from
+    lambda_handler()'s exception routing, always AFTER invoke_retry_handler()
     has already run for this invocation, per the required order: retry
-    handler first, then this SNS notification.
-    """
-    if not SNS_TOPIC_ARN:
-        logger.warning("SNS_TOPIC_ARN is not configured. Skipping database connection failure SNS.")
+    handler first, then alerting."""
+    if not should_send_alert(failure_type):
+        logger.info("SNS alert suppressed for %s - cooldown active", failure_type)
         return
-    try:
-        message = DB_CONNECTION_FAILURE_MESSAGE_TEMPLATE.format(
-            partner_name=partner_name or "Unknown",
-            error=str(error)
-        )
-        sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
-            Subject="Database Connection Failure - Manifest Metadata Lambda",
-            Message=message,
-        )
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="DatabaseConnectionFailureNotificationsSent",
-            value=1
-        )
-        logger.info("Database connection failure SNS notification sent")
-    except Exception:
-        logger.exception("Failed to send database connection failure SNS notification")
+    _dispatch_failure_sns(failure_type, error)
+    record_alert_time(failure_type)
 
 
 # FILE VALIDATION AND COUNTING
 def read_manifest_expected_counts(bucket, key):
     """Read the manifest file and extract expected counts."""
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    content = obj["Body"].read().decode("utf-8")
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        raw = obj["Body"].read()
+    except Exception as e:
+        raise S3RetrievalError(f"Failed to retrieve manifest {key!r} from bucket {bucket!r}: {e}") from e
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ManifestParsingError(f"Manifest {key!r} is not valid UTF-8 text: {e}") from e
     counts = {}
     for line in content.splitlines():
         match = re.search(
@@ -602,21 +687,35 @@ def read_manifest_expected_counts(bucket, key):
             label = match.group(1).upper()
             counts[label] = int(match.group(2))
     if not counts:
-        raise ValueError(f"Manifest contains no counts: {key}")
+        raise ManifestParsingError(f"Manifest contains no counts: {key}")
     return counts
 
 
 def count_zip(bucket, key):
     """Count the number of files inside a ZIP archive."""
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    with zipfile.ZipFile(io.BytesIO(obj["Body"].read())) as z:
-        return len([f for f in z.namelist() if not f.endswith("/")])
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        zip_bytes = obj["Body"].read()
+    except Exception as e:
+        raise S3RetrievalError(f"Failed to retrieve zip {key!r} from bucket {bucket!r}: {e}") from e
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+            return len([f for f in z.namelist() if not f.endswith("/")])
+    except zipfile.BadZipFile as e:
+        raise ManifestParsingError(f"Zip file {key!r} is malformed/unreadable: {e}") from e
 
 
 def count_report_rows(bucket, key):
     """Count the number of data rows in the report file."""
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    content = obj["Body"].read().decode("utf-8")
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        raw = obj["Body"].read()
+    except Exception as e:
+        raise S3RetrievalError(f"Failed to retrieve report {key!r} from bucket {bucket!r}: {e}") from e
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ManifestParsingError(f"Report {key!r} is not valid UTF-8 text: {e}") from e
     lines = content.splitlines()
     if not lines:
         return 0
@@ -635,8 +734,15 @@ def extract_received_report_rows(bucket, key):
     then dropped: patient_details.SSN is CHECK-constrained to always be
     the literal 'Null', so the real SSN is never persisted downstream.
     """
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    content = obj["Body"].read().decode("utf-8")
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        raw = obj["Body"].read()
+    except Exception as e:
+        raise S3RetrievalError(f"Failed to retrieve received-report {key!r} from bucket {bucket!r}: {e}") from e
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ManifestParsingError(f"Received-report {key!r} is not valid UTF-8 text: {e}") from e
     lines = content.splitlines()
     if not lines:
         return []
@@ -682,8 +788,15 @@ def extract_disclosure_report_rows(bucket, key):
     Partner, User_ID/Name, Role_Code, CommonWell_Indicator). SSN (index 3)
     is intentionally parsed and dropped, same as extract_received_report_rows.
     """
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    content = obj["Body"].read().decode("utf-8")
+    try:
+        obj = s3.get_object(Bucket=bucket, Key=key)
+        raw = obj["Body"].read()
+    except Exception as e:
+        raise S3RetrievalError(f"Failed to retrieve disclosure-report {key!r} from bucket {bucket!r}: {e}") from e
+    try:
+        content = raw.decode("utf-8")
+    except UnicodeDecodeError as e:
+        raise ManifestParsingError(f"Disclosure-report {key!r} is not valid UTF-8 text: {e}") from e
     lines = content.splitlines()
     if not lines:
         return []
@@ -817,7 +930,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": ingestion_method,
-        "direction": "inbound" if "inbound" in manifest_meta["file_name"].lower() else ("outbound" if "outbound" in manifest_meta["file_name"].lower() else manifest_meta["file_name"]),
+        "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -906,8 +1019,6 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             bucket,
             batch_id
         )
-        if not isinstance(e, DatabaseConnectionError):
-            send_processing_failure_sns(error=e, bucket=bucket, batch_id=batch_id, partner_name=partner_name)
         raise
     finally:
         if conn:
@@ -1051,13 +1162,13 @@ def send_metadata_to_sqs(message):
             message["source"]["batch_id"],
             message["message_type"]
         )
-    except Exception:
+    except Exception as e:
         logger.exception(
             "Batch %s | %s | SQS message sent = false",
             message["source"]["batch_id"],
             message["message_type"]
         )
-        raise
+        raise SQSPublishError(str(e)) from e
 
     put_metric(
         namespace="HIE/OperationalMonitoring",
@@ -1209,15 +1320,20 @@ def lambda_handler(event, context):
                 ]
             )
             invoke_retry_handler(e, event)
+
             if isinstance(e, DatabaseConnectionError):
-                send_db_connection_failure_sns(error=e)
+                send_failure_alert("DatabaseConnectionError", e)
+            elif isinstance(e, S3RetrievalError):
+                send_failure_alert("S3RetrievalError", e)
+            elif isinstance(e, ManifestParsingError):
+                send_failure_alert("ManifestParsingError", e)
+            elif isinstance(e, PartnerMappingError):
+                send_failure_alert("PartnerMappingError", e)
+            elif isinstance(e, SQSPublishError):
+                send_failure_alert("SQSPublishError", e)
             else:
-                try:
-                    failure_key = key
-                except UnboundLocalError:
-                    failure_key = unquote_plus(record.get("s3", {}).get("object", {}).get("key") or "")
-                batch_id = extract_batch_id(os.path.basename(failure_key)) if failure_key else "unknown"
-                send_processing_failure_sns(error=e, bucket=bucket, batch_id=batch_id)
+                send_failure_alert("ProcessingError", e)
+
             return {
                 "statusCode": 202,
                 "body": json.dumps({
