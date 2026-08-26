@@ -817,7 +817,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": ingestion_method,
-        "manifest_companion_mapping": manifest_meta["file_name"],
+        "direction": "inbound" if "inbound" in manifest_meta["file_name"].lower() else ("outbound" if "outbound" in manifest_meta["file_name"].lower() else manifest_meta["file_name"]),
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
