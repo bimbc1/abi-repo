@@ -125,7 +125,7 @@ def ensure_tables(cur):
             batch_id TEXT NOT NULL,
             environment VARCHAR(20) NOT NULL,
             file_name TEXT,
-            manifest_companion_mapping TEXT,
+            direction VARCHAR(10) NOT NULL,
             edipi BIGINT NOT NULL,
             SSN VARCHAR(11),
             patient_last_name VARCHAR(100) NOT NULL,
