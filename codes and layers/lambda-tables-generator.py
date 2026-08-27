@@ -22,22 +22,16 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 _cached_creds = None
 
 
-def invoke_retry_handler(error, event):
-    """Replaces the old send_to_dlq() call site. retry_utils is
-    imported at the top of this file from the Lambda Layer (same
-    pattern as psycopg2) -- no S3 download needed at runtime, since the
-    layer is already mounted at /opt by the time this code runs.
 
-    ASSUMPTION -- confirm this matches your actual layer's contents:
-    it's expected to expose a function `handle_retry(error, event)`.
-    Adjust the call below if your layer's function name differs.
-    """
+def invoke_retry_handler(error, event) -> bool:
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
+        return True
 
     except Exception as e:
         logger.error(f"Retry handler invocation failed: {e}")
+        return False
 
 
 # DB CONNECTION
@@ -210,7 +204,8 @@ def lambda_handler(event, context):
         conn = get_conn()
     except Exception as e:
         logger.exception("Database connection failed")
-        invoke_retry_handler(e, event)
+        if not invoke_retry_handler(e, event):
+            raise
         return {
             "statusCode": 202,
             "body": json.dumps("Database connection failed; retry handler invoked.")
