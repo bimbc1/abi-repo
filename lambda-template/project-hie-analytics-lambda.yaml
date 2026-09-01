@@ -114,26 +114,13 @@ Resources:
       Role: !ImportValue 
         Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
       Runtime: python3.14
-      Handler: index.lambda_handler
+      Handler: process_manifest_metadata.lambda_handler
       MemorySize: 1024
       Timeout: 300
 
       Code:
-        ZipFile: |
-          import json
-          import psycopg2
-          import os
-          import boto3
-
-          def lambda_handler(event, context):
-
-              secret_arn = os.environ['DB_SECRET_ARN']
-              host = os.environ['DB_HOST']
-
-              return {
-                  "statusCode": 200,
-                  "body": json.dumps("Lambda working with psycopg2 layer")
-              }
+        S3Bucket: demo-bucket-idn
+        S3Key: process_manifest_metadata.zip
         
       Layers:
         - !Ref Psycopg2Layer
