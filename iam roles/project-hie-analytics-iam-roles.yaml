@@ -127,16 +127,6 @@ Resources:
                   - sqs:GetQueueAttributes
                 Resource: "*"
 
-      Policies:
-        - PolicyName: !Sub project-hie-analytics-lambda-sqs-policy-${Env}
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                Resource: "*"
-
         - PolicyName: !Sub project-hie-analytics-lambda-invoke-notification-${Env}
           PolicyDocument:
             Version: '2012-10-17'
