@@ -125,16 +125,18 @@ Resources:
                 Action:
                   - sqs:SendMessage
                   - sqs:GetQueueAttributes
-                Resource: "*"
+                Resource: !ImportValue
+                  Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
 
-        - PolicyName: !Sub project-hie-analytics-lambda-sns-policy-${Env}
-          PolicyDocument:
-            Version: '2012-10-17"
+        - PolicyName: !Sub project-hie-analytics-lambda-sns-publish-policy-${Env}
+          PolicyDocument: 
+            Version: "2012-10-17"
             Statement:
               - Effect: Allow
                 Action:
                   - sns:Publish
-                Resource: "*"
+                Resource: !ImportValue
+                  Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
         - PolicyName: !Sub project-hie-analytics-lambda-invoke-notification-${Env}
           PolicyDocument:
@@ -148,7 +150,7 @@ Resources:
   IAMRolehieInsertionLambdaFullAccess:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: !Sub project-hie-insertion-lambda-full-access-role-${Env}
+      RoleName: !Sub project-hie-analytics-insertion-lambda-full-access-role-${Env}
       Tags:
         - Key: tenant:CKID
           Value: '2598'
@@ -156,7 +158,7 @@ Resources:
           Value: AWG20251201001
         - Key: va_vasi_id
           Value: '2238'
-      Path: 
+      Path: /project/
       PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
 
       ManagedPolicyArns:
@@ -182,15 +184,6 @@ Resources:
                 Action:
                   - sqs:SendMessage
                 Resource: '*'
-
-        - PolicyName: !Sub project-hie-analytics-lambda-sns-policy-${Env}
-          PolicyDocument:
-            Version: '2012-10-17"
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sns:Publish
-                Resource: "*"
 
                 
   IAMRolehieEC2SSMSessionRole:
