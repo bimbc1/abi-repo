@@ -120,7 +120,7 @@ Resources:
 
       Code:
         S3Bucket: demo-bucket-idn
-        S3Key: process_manifest_metadata.zip
+        S3Key: process-manifest-metadata.zip
         
       Layers:
         - !Ref Psycopg2Layer
@@ -144,6 +144,11 @@ Resources:
             {partner_name} file delivery has resumed and files are being received successfully.
 
           WARNING_INFO: "WARNING!! This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."             
+            # Tracking change: topic used only for database connection failure and SQS publish failure alerts. Other alerts are sent to the partner-specific topic.
+          OPERATIONAL_SNS_TOPIC_ARN: !ImportValue 
+              Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
+          # Ticket change: suppress requested alert in the same category for 15 minutes to avoid alert fatigue. This is a temporary measure until a more robust alerting mechanism is implemented.
+          ALERT_COOLDOWN_SECONDS: "900"
 
       VpcConfig:
         SubnetIds:
