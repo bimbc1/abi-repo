@@ -26,6 +26,16 @@ RESUMED_MESSAGE_TEMPLATE = os.environ.get(
 )
 WARNING_INFO = os.environ.get("WARNING_INFO", "")
 
+# Variables for database connection and SQS queue.
+
+OPERATIONAL_SNS_TOPIC_ARN = os.environ.get("OPERATIONAL_SNS_TOPIC_ARN")
+
+ALERT_COOLDOWN_SECONDS = int(
+	os.environ.get("ALERT_COOLDOWN_SECONDS", "900")
+)
+_last_alert_times = {}
+
+
 sns = boto3.client("sns", region_name=AWS_REGION)
 
 METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
@@ -60,9 +70,16 @@ def invoke_retry_handler(error, event):
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
+        return True
 
     except Exception as e:
         logger.error(f"Retry handler invocation failed: {e}")
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="RetryHandlerInvocationFailures",
+            value=1
+        )
+        return False
 
 
 # COMMON HELPERS
@@ -205,66 +222,243 @@ def get_object_metadata(bucket, key):
     }
 
 
-PROCESSED_TAG_KEY = "metadata-sent"
 PROCESSED_TAG_VALUE = "true"
+MANIFEST_SENT_TAG_KEY = "manifest-metadata-sent"
+REPORT_SENT_TAG_KEY = "report-metadata-sent"
+
+
+def _get_object_tags(bucket, key):
+    """Read all tags on an S3 object as a dict. Fails safe toward an
+    empty dict (logging a warning) so callers treat an unreadable tag
+    set as "not sent yet" rather than raising."""
+    try:
+        tags = s3.get_object_tagging(Bucket=bucket, Key=key)
+        return {t["Key"]: t["Value"] for t in tags.get("TagSet", [])}
+    except Exception as e:
+        logger.warning("Could not read tags on %s: %s", key, e)
+        return {}
+
+
+def is_message_already_sent(bucket, key, tag_key):
+    """Check a single per-message sent-status tag (manifest vs. report
+    are tracked independently under MANIFEST_SENT_TAG_KEY /
+    REPORT_SENT_TAG_KEY), so a retry after a partial failure only
+    re-sends whichever message didn't actually make it to SQS, instead
+    of re-sending both."""
+    return _get_object_tags(bucket, key).get(tag_key) == PROCESSED_TAG_VALUE
+
+
+def mark_message_as_sent(bucket, key, tag_key):
+    """Tag the object with a single message's sent-status. Reads the
+    existing tag set first and merges in, since put_object_tagging
+    replaces the whole tag set and would otherwise clobber the other
+    message's tag."""
+    try:
+        tag_set = _get_object_tags(bucket, key)
+        tag_set[tag_key] = PROCESSED_TAG_VALUE
+        s3.put_object_tagging(
+            Bucket=bucket,
+            Key=key,
+            Tagging={"TagSet": [{"Key": k, "Value": v} for k, v in tag_set.items()]}
+        )
+    except Exception as e:
+        logger.warning("Could not tag %s as sent (%s): %s", key, tag_key, e)
 
 
 def is_batch_already_sent(bucket, manifest_key):
-    """Check an S3 object tag on the manifest to see if this batch was
-    already published to SQS. This is also the gate that keeps the
-    partner-state update / breach-flag clear (added below) from firing
-    more than once for the same batch on retries/re-invocations."""
-    try:
-        tags = s3.get_object_tagging(Bucket=bucket, Key=manifest_key)
-        tag_set = {t["Key"]: t["Value"] for t in tags.get("TagSet", [])}
-        return tag_set.get(PROCESSED_TAG_KEY) == PROCESSED_TAG_VALUE
-    except Exception as e:
-        logger.warning("Could not read tags on %s: %s", manifest_key, e)
+    """Check whether BOTH the manifest and report messages for this
+    batch have already been published to SQS. This is also the gate
+    that keeps the partner-state update / breach-flag clear (added
+    below) from firing more than once for the same batch on
+    retries/re-invocations."""
+    tag_set = _get_object_tags(bucket, manifest_key)
+    return (
+        tag_set.get(MANIFEST_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
+        and tag_set.get(REPORT_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
+    )
+
+
+class DatabaseConnectionError(RuntimeError):
+	"""Raised when there is an error connecting to the database."""
+
+class SQSPublishError(RuntimeError):
+	"""Raised when there is an error publishing to the SQS queue."""
+
+
+def _should_publish_alert(failure_category):
+    """Determine whether an alert may be published for the category."""
+    now = datetime.now(timezone.utc)
+    last_alert_time = _last_alert_times.get(failure_category)
+
+    if last_alert_time is not None:
+        elapsed_seconds = (now - last_alert_time).total_seconds()
+        if elapsed_seconds < ALERT_COOLDOWN_SECONDS:
+            logging.info(
+                "Suppressing repeated alert for category '%s'. Last alert was sent %d seconds ago.",
+                failure_category,
+                ALERT_COOLDOWN_SECONDS - elapsed_seconds,
+            )
+            return False
+    return True
+
+def _record_alert_time(failed_category):
+	""" Record the time when an alert was sent for a specific category. """
+	_last_alert_times[failed_category] = datetime.now(timezone.utc)
+
+def _publish_operational_alert(subject, message, failure_category):
+    """Publish an alert to the operational SNS topic if the cooldown has passed."""
+    if not OPERATIONAL_SNS_TOPIC_ARN:
+        logging.error(
+            "Operational SNS topic ARN is not configured. Cannot publish alert for category '%s'.",
+            failure_category,
+        )
         return False
 
+    if not _should_publish_alert(failure_category):
+        return False
 
-def mark_batch_as_sent(bucket, manifest_key):
-    """Tag the manifest object so future invocations for the same
-    batch know metadata was already sent."""
     try:
-        s3.put_object_tagging(
-            Bucket=bucket,
-            Key=manifest_key,
-            Tagging={"TagSet": [{"Key": PROCESSED_TAG_KEY, "Value": PROCESSED_TAG_VALUE}]}
+        sns.publish(
+            TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
+            Subject=subject[:100],
+            Message=message,
+            MessageAttributes={
+                "failed_category": {
+                    "StringValue": failure_category,
+                    "DataType": "String",
+                }
+            },
         )
-    except Exception as e:
-        logger.warning("Could not tag %s as sent: %s", manifest_key, e)
+        _record_alert_time(failure_category)
+        logger.info(
+            "Published alert to SNS topic '%s' for category '%s'.",
+            OPERATIONAL_SNS_TOPIC_ARN,
+            failure_category,
+        )
+        return True
 
+    except Exception:
+        logging.exception("Unable to publish metadata message")
+        return False
 
-# DATABASE HELPERS
+    except Exception:
+        logging.error(
+            "Failed to publish alert to SNS topic '%s' for category '%s'.",
+            OPERATIONAL_SNS_TOPIC_ARN,
+            failure_category,
+            exc_info=True,
+        )
+        return False
+
+def notify_database_connection_failure(failure_category, error_message):
+    """Notify about a database connection failure."""
+    request_id = (
+        getattr(globals().get("context"), "aws_request_id", None)
+        if globals().get("context")
+        else None
+    )
+    message = (
+        f"CRITICAL: manifest processing failed for category '{failure_category}' due to database connection error.\n"
+        f"Failure category: {failure_category}\n"
+        f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+        f"AWS Region: {AWS_REGION}\n"
+        f"Lambda request ID: {request_id}\n"
+        f"Database host: {DB_HOST}\n"
+        f"Error type: {type(error_message).__name__}\n"
+        f"Error message: {str(error_message)}\n"
+        "Requested action: Check Aurora database connectivity and credentials.\n"
+        "security groups, VPC settings, and database availability.\n"
+    )
+    return _publish_operational_alert(
+        subject=f"CRITICAL: Database Connection Failure for category '{failure_category}'",
+        message=message,
+        failure_category="Database Connection Failure",
+    )
+
+def notify_sqs_publish_failure(error, context=None):
+    """Notify about an SQS publish failure without exposing message metadata."""
+    request_id = (
+        getattr(context, "aws_request_id", None)
+        if context
+        else None
+    )
+    message = (
+        "CRITICAL: Manifest processing failed due to SQS publish error.\n"
+        "Failure category: SQS Publish Failure\n"
+        f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+        f"AWS Region: {AWS_REGION}\n"
+        f"Lambda request ID: {request_id}\n"
+        f"Database host: {DB_HOST}\n"
+        f"Error type: {type(error).__name__}\n"
+        f"Error message: {str(error)}\n"
+        "Requested action: Check Aurora database connectivity and credentials.\n"
+        "security groups, VPC settings, and database availability.\n"
+    )
+    return _publish_operational_alert(
+        subject="CRITICAL: SQS Publish Failure",
+        message=message,
+        failure_category="SQS Publish Failure",
+    )
+
+def route_critical_failure_notification(error, context=None):
+    """Route critical failure notifications based on the error type."""
+    if isinstance(error, DatabaseConnectionError):
+        return notify_database_connection_failure("Database Connection Failure", error)
+    if isinstance(error, SQSPublishError):
+        return notify_sqs_publish_failure(error, context)
+
+    logging.debug(
+        "Error message does not match any known critical failure types. No alert will be sent. "
+        "Error type: %s",
+        type(error).__name__,
+    )
+    return False
+
 def get_conn():
-    try:
-        secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
-        creds = json.loads(secret["SecretString"])
-        return psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=creds["username"],
-            password=creds["password"],
-            sslmode="require",
-            connect_timeout=10,
-        )
-    except Exception as e:
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="DatabaseConnectionFailures",
-            value=1
-        )
-        if "password authentication failed" in str(e).lower():
-            put_metric(
-                namespace="HIE/OperationalMonitoring",
-                metric_name="LoginFailures",
-                value=1
-            )
-        logger.exception("Database connection failure")
-        raise DatabaseConnectionError(str(e)) from e
+	""" Establish a connection to the Aurora database using psycopg2. """
+	try:
+		secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+		creds = json.loads(secret['SecretString'])
 
+		return psycopg2.connect(
+			host=DB_HOST,
+			port=DB_PORT,
+			dbname=DB_NAME,
+			user=creds['username'],
+			password=creds['password'],
+			connect_timeout=10,
+		)
+	except Exception as error:
+		logging.exception("Unable to connect to the database: %s", str(error))
+		raise DatabaseConnectionError("Manifest processing failed due to database connection error."
+  		) from error
+
+
+# SQS MESSAGE HELPERS
+
+def publish_metadata_message(message_body, message_attributes=None):
+    """ Publish a message to the SQS queue. """
+    try:
+        if not METADATA_QUEUE_URL:
+            raise ValueError("METADATA_QUEUE_URL is not configured.")
+        request = {
+            "QueueUrl": METADATA_QUEUE_URL,
+            "MessageBody": (
+                message_body if isinstance(message_body, str) else json.dumps(message_body)
+            )
+        }
+        if message_attributes:
+            request["MessageAttributes"] = message_attributes
+
+        return sqs.send_message(
+            message_body=request["MessageBody"],
+            message_attributes=request.get("MessageAttributes")
+        )
+    except Exception as error:
+        logging.exception("Unable to publish metadata message: %s", str(error))
+
+        raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
+# =====================================================================
 
 def get_partner_info(cur, bucket_name):
     bucket_arn = f"arn:aws-us-gov:s3:::{bucket_name}"
@@ -494,12 +688,56 @@ def read_manifest_expected_counts(bucket, key):
     return counts
 
 
+class _S3RangeReader:
+    """Minimal seekable, read-only file-like object that fetches only
+    the byte ranges zipfile actually needs from S3 via ranged
+    GetObject calls, so count_zip() never has to pull the whole
+    archive into Lambda memory."""
+
+    def __init__(self, bucket, key, size):
+        self._bucket = bucket
+        self._key = key
+        self._size = size
+        self._pos = 0
+
+    def read(self, size=-1):
+        if size is None or size < 0:
+            end = self._size - 1
+        else:
+            end = min(self._pos + size, self._size) - 1
+        if self._size == 0 or self._pos > end:
+            return b""
+        resp = s3.get_object(
+            Bucket=self._bucket,
+            Key=self._key,
+            Range=f"bytes={self._pos}-{end}"
+        )
+        data = resp["Body"].read()
+        self._pos += len(data)
+        return data
+
+    def seek(self, offset, whence=0):
+        if whence == 0:
+            self._pos = offset
+        elif whence == 1:
+            self._pos += offset
+        elif whence == 2:
+            self._pos = self._size + offset
+        else:
+            raise ValueError(f"Unsupported whence: {whence}")
+        return self._pos
+
+    def tell(self):
+        return self._pos
+
+    def seekable(self):
+        return True
+
 
 def count_zip(bucket, key):
     """Count the number of files inside a ZIP archive."""
-    obj = s3.get_object(Bucket=bucket, Key=key)
-    zip_bytes = obj["Body"].read()
-    with zipfile.ZipFile(io.BytesIO(zip_bytes)) as z:
+    size = s3.head_object(Bucket=bucket, Key=key)["ContentLength"]
+    with zipfile.ZipFile(_S3RangeReader(bucket, key, size)) as z:
         return len([f for f in z.namelist() if not f.endswith("/")])
 
 
@@ -709,7 +947,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": ingestion_method,
-        "direction": manifest_meta["file_name"],
+        "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -770,7 +1008,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             partner_name = get_partner_name(cur, partner_id)
 
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
-            latest_meta = max(candidates, key=lambda m: m["last_modified_utc"]) if candidates else manifest_meta
+            latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
             update_partner_state(cur, partner_id, latest_meta["key"])
 
             elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
@@ -1034,10 +1272,19 @@ def process_object(bucket, key, record):
         return {"processed": False, "reason": "BATCH_NOT_READY_OR_ALREADY_SENT"}
     manifest_message, report_message, manifest_key = result
 
-    send_metadata_to_sqs(manifest_message)
-    send_metadata_to_sqs(report_message)
+    batch_id = manifest_message["source"]["batch_id"]
 
-    mark_batch_as_sent(bucket, manifest_key)
+    if not is_message_already_sent(bucket, manifest_key, MANIFEST_SENT_TAG_KEY):
+        send_metadata_to_sqs(manifest_message)
+        mark_message_as_sent(bucket, manifest_key, MANIFEST_SENT_TAG_KEY)
+    else:
+        logger.info("Batch %s | manifest message already sent, skipping duplicate send.", batch_id)
+
+    if not is_message_already_sent(bucket, manifest_key, REPORT_SENT_TAG_KEY):
+        send_metadata_to_sqs(report_message)
+        mark_message_as_sent(bucket, manifest_key, REPORT_SENT_TAG_KEY)
+    else:
+        logger.info("Batch %s | report message already sent, skipping duplicate send.", batch_id)
 
     put_metric(
         namespace="HIE/OperationalMonitoring",
@@ -1069,6 +1316,8 @@ def lambda_handler(event, context):
         logger.info("No records found in event.")
         return {"statusCode": 200, "body": "No records to process."}
     results = []
+    had_failure = False
+    retry_handler_failed = False
     for record in records:
         bucket = record.get("s3", {}).get("bucket", {}).get("name", "unknown")
         try:
@@ -1079,6 +1328,7 @@ def lambda_handler(event, context):
             result = process_object(bucket, key, record)
             results.append(result)
         except Exception as e:
+            had_failure = True
             error_message = str(e)
             if "AccessDenied" in error_message or "access denied" in error_message.lower():
                 put_metric(
@@ -1100,15 +1350,32 @@ def lambda_handler(event, context):
                     {"Name": "Status", "Value": "Failure"}
                 ]
             )
-            invoke_retry_handler(e, event)
- 
-            return {
-                "statusCode": 202,
-                "body": json.dumps({
-                    "message": "Metadata Lambda processing failed; retry handler invoked.",
-                    "results": results
-                })
-            }
+            if not invoke_retry_handler(e, event):
+                retry_handler_failed = True
+
+            route_critical_failure_notification(e, record)
+
+            results.append({
+                "processed": False,
+                "reason": "PROCESSING_ERROR",
+                "error": error_message
+            })
+    if retry_handler_failed:
+        return {
+            "statusCode": 500,
+            "body": json.dumps({
+                "message": "Metadata Lambda processing failed and the retry handler also failed; no retry is guaranteed.",
+                "results": results
+            })
+        }
+    if had_failure:
+        return {
+            "statusCode": 202,
+            "body": json.dumps({
+                "message": "Metadata Lambda processing failed for one or more records; retry handler invoked.",
+                "results": results
+            })
+        }
     return {
         "statusCode": 200,
         "body": json.dumps({
