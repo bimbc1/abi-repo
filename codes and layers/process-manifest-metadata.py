@@ -28,8 +28,6 @@ WARNING_INFO = os.environ.get("WARNING_INFO", "")
 
 # Variables for database connection and SQS queue.
 
-OPERATIONAL_SNS_TOPIC_ARN = os.environ.get("OPERATIONAL_SNS_TOPIC_ARN")
-
 ALERT_COOLDOWN_SECONDS = int(
 	os.environ.get("ALERT_COOLDOWN_SECONDS", "900")
 )
@@ -306,10 +304,10 @@ def _record_alert_time(failed_category):
 	_last_alert_times[failed_category] = datetime.now(timezone.utc)
 
 def _publish_operational_alert(subject, message, failure_category):
-    """Publish an alert to the operational SNS topic if the cooldown has passed."""
-    if not OPERATIONAL_SNS_TOPIC_ARN:
+    """Publish an alert to the SNS topic if the cooldown has passed."""
+    if not SNS_TOPIC_ARN:
         logging.error(
-            "Operational SNS topic ARN is not configured. Cannot publish alert for category '%s'.",
+            "SNS_TOPIC_ARN is not configured. Cannot publish alert for category '%s'.",
             failure_category,
         )
         return False
@@ -319,7 +317,7 @@ def _publish_operational_alert(subject, message, failure_category):
 
     try:
         sns.publish(
-            TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
+            TopicArn=SNS_TOPIC_ARN,
             Subject=subject[:100],
             Message=message,
             MessageAttributes={
@@ -332,7 +330,7 @@ def _publish_operational_alert(subject, message, failure_category):
         _record_alert_time(failure_category)
         logger.info(
             "Published alert to SNS topic '%s' for category '%s'.",
-            OPERATIONAL_SNS_TOPIC_ARN,
+            SNS_TOPIC_ARN,
             failure_category,
         )
         return True
@@ -344,7 +342,7 @@ def _publish_operational_alert(subject, message, failure_category):
     except Exception:
         logging.error(
             "Failed to publish alert to SNS topic '%s' for category '%s'.",
-            OPERATIONAL_SNS_TOPIC_ARN,
+            SNS_TOPIC_ARN,
             failure_category,
             exc_info=True,
         )
@@ -1181,13 +1179,13 @@ def send_metadata_to_sqs(message):
             message["source"]["batch_id"],
             message["message_type"]
         )
-    except Exception:
+    except Exception as error:
         logger.exception(
             "Batch %s | %s | SQS message sent = false",
             message["source"]["batch_id"],
             message["message_type"]
         )
-        raise
+        raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
 
     put_metric(
         namespace="HIE/OperationalMonitoring",
