@@ -183,7 +183,8 @@ Resources:
               - Effect: Allow
                 Action:
                   - sqs:SendMessage
-                Resource: '*'
+                Resource: !ImportValue
+                  Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
 
                 
   IAMRolehieEC2SSMSessionRole:
