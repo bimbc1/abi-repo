@@ -1,0 +1,2 @@
+987654321_123456789_PatientDisclosureCCDA	- number of rows/files: 10	sha256 Checksum: 3d7f14f5f8b785bfd559ae1b75f735133172cc62704b6cd6ca2e44431c88fe6b
+987654321_123456789_PatientDisclosureReport	- number of rows/files: 15	sha256 Checksum: 02a3e2b0ceb809e9e733cae3f04ce83e6cee74372d5c0db9488dafe3b3acfbad
