@@ -137,7 +137,7 @@ Resources:
           METADATA_QUEUE_URL: !ImportValue
             Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
           SNS_TOPIC_ARN: !ImportValue 
-            Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
+            Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
           SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
          
           RESUMED_MESSAGE_TEMPLATE: |
