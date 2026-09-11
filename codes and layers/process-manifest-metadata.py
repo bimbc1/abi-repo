@@ -316,7 +316,7 @@ def notify_database_connection_failure(failure_category, error_message):
             "security groups, VPC settings, and database availability.\n"
         )
     return _publish_operational_alert(
-        subject=f"CRITICAL: Database Connection Failure for category '{failure_category}'",
+        subject=f"CRITICAL: Manifest processing failed due to database connection error {os.environ.get('ENVIRONMENT', 'Unknown')} Environment",
         message=message,
         failure_category="Database Connection Failure",
     )
@@ -357,7 +357,7 @@ def notify_sqs_publish_failure(error, context=None):
             "security groups, VPC settings, and database availability.\n"
         )
     return _publish_operational_alert(
-        subject="CRITICAL: SQS Publish Failure",
+        subject=f"CRITICAL: Manifest processing failed due to SQS publish error {os.environ.get('ENVIRONMENT', 'Unknown')} Environment",
         message=message,
         failure_category="SQS Publish Failure",
     )
