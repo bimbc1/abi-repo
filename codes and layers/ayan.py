@@ -1154,7 +1154,7 @@ def process_object(bucket, key, record):
 
 # LAMBDA ENTRY
 def lambda_handler(event, context):
-    """Main Lambda handler."""
+    logger.info("Main Lambda handler.")
     records = event.get("Records", [])
     if not records:
         logger.info("No records found in event.")
