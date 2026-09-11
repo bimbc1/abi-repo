@@ -1,0 +1,47 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: Test template for SNS topic creation and subscription.
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues: 
+      - dev
+      - stg
+      - prod
+
+Mappings:
+  EnvConfig:
+    dev:
+      EmailAddress1: abimbolaabiodun6@gmail.com
+    stg:
+      EmailAddress1: abimbolaabiodun6@gmail.com
+    prod:
+      EmailAddress1: abimbolaabiodun6@gmail.com
+
+Resources:
+  TestFailureSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub test-ingestion-failure-alerts-${Env}
+      DisplayName: !Sub Test Ingestion Failure Alerts ${Env}
+    
+  TestFailureEmailSubscription1:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref TestFailureSNSTopic
+      Protocol: email
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress1]
+  
+Outputs:
+  TestSNSTopicArn:
+    Description: "ARN of the SNS topic for test ingestion failure alerts"
+    Value: !Ref TestFailureSNSTopic
+    Export: 
+      Name: !Sub test-ingestion-failure-alerts-sns-topic-arn-${Env}
+    
+  TestSNSTopicName:
+    Description: "Name of the SNS topic for test ingestion failure alerts"
+    Value: !GetAtt TestFailureSNSTopic.TopicName
+    Export: 
+      Name: !Sub test-ingestion-failure-alerts-sns-topic-name-${Env}
