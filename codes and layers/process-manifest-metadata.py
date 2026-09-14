@@ -10,7 +10,7 @@ import boto3
 import psycopg2
 import retry_utils
 
-logger = logging.getLogger() 
+logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
 
 AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
@@ -43,6 +43,11 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 def invoke_retry_handler(error, event):
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="Retries",
+        value=1
+    )
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
@@ -59,7 +64,7 @@ def invoke_retry_handler(error, event):
 
 
 # COMMON HELPERS
-def utc_now_iso(): 
+def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
 
 
@@ -265,6 +270,12 @@ def _publish_operational_alert(subject, message, failure_category):
             SNS_TOPIC_ARN,
             failure_category,
         )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="ActiveIncidents",
+            value=1,
+            dimensions=[{"Name": "FailureCategory", "Value": failure_category}]
+        )
         return True
 
     except Exception:
@@ -392,6 +403,11 @@ def get_conn():
         )
     except Exception as error:
         logging.exception("Unable to connect to the database: %s", str(error))
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="DatabaseConnectionFailures",
+            value=1
+        )
         raise DatabaseConnectionError("Manifest processing failed due to database connection error."
         ) from error
 
@@ -459,13 +475,14 @@ def update_partner_state(cur, partner_id, object_key):
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
     cur.execute(
         """
-        SELECT 1
+        SELECT last_seen_at
         FROM partner_transmission_state
         WHERE partner_id = %s
         """,
         (partner_id,),
     )
-    if cur.fetchone():
+    existing_row = cur.fetchone()
+    if existing_row:
         cur.execute(
             """
             UPDATE partner_transmission_state
@@ -491,6 +508,36 @@ def update_partner_state(cur, partner_id, object_key):
             """,
             (partner_id, now, batch_id, clean_filename, now),
         )
+    put_metric(
+        namespace="HIE/PartnerMonitoring",
+        metric_name="PartnerTransmissionReceived",
+        value=1,
+        unit="Count",
+        dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+    )
+    if existing_row and existing_row[0]:
+        previous_last_seen_at = existing_row[0]
+        if previous_last_seen_at.tzinfo is None:
+            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
+        gap_seconds = (now - previous_last_seen_at).total_seconds()
+        cur.execute(
+            """
+            SELECT expected_interval_seconds
+            FROM partner_schedule
+            WHERE partner_id = %s
+            """,
+            (partner_id,),
+        )
+        schedule_row = cur.fetchone()
+        expected_interval_seconds = schedule_row[0] if schedule_row else None
+        if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
+            put_metric(
+                namespace="HIE/PartnerMonitoring",
+                metric_name="StaleConnection",
+                value=1,
+                unit="Count",
+                dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+            )
 
 
 def clear_breach_flag(cur, partner_id, expected_interval_seconds):
@@ -1060,7 +1107,7 @@ def send_metadata_to_sqs(message):
         if message["message_type"] == "PATIENT_REPORT_METADATA_UPSERT":
             put_metric(
                 namespace="HIE/PartnerMonitoring",
-                metric_name="FilesIn",
+                metric_name="FilesOut" if message.get("direction") == "outbound" else "FilesIn",
                 value=message["metrics"].get("files_in", 0),
                 unit="Count",
                 dimensions=[{"Name": "PartnerName", "Value": partner_name}]
@@ -1155,9 +1202,15 @@ def process_object(bucket, key, record):
 # LAMBDA ENTRY
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
+    invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
         logger.info("No records found in event.")
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="ServiceAvailability",
+            value=1
+        )
         return {"statusCode": 200, "body": "No records to process."}
     results = []
     had_failure = False
@@ -1204,6 +1257,17 @@ def lambda_handler(event, context):
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="Latency",
+        value=(datetime.now(timezone.utc) - invocation_start).total_seconds(),
+        unit="Seconds"
+    )
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="ServiceAvailability",
+        value=0 if retry_handler_failed else 1
+    )
     if retry_handler_failed:
         return {
             "statusCode": 500,
