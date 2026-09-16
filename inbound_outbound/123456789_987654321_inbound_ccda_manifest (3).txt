@@ -1,0 +1,2 @@
+123456789_987654321_PatientReceivedReport	- number of rows/files:	10	sha256 Checksum:	4cfb6114a02988e6648bb257b9bbe95dcb0ce13df8b9f9b9b3c3278d98d4b93b
+123456789_987654321_PatientReceivedCCDA	- number of rows/files:	10	sha256 Checksum:	267b543cfec3c5179a17cd98ec10302a566fa638a5a45a8e7f70802a4ccdaa93
