@@ -95,7 +95,7 @@ Resources:
             Manifest metadata processing has failed due to a {failure_type}.
             Error: {error}
 
-            "WARNING_INFO: WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
+          WARNING_INFO: "WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
 
 
       VpcConfig:
@@ -149,14 +149,14 @@ Resources:
           RESUMED_MESSAGE_TEMPLATE: |
             {partner_name} file delivery has resumed and files are being received successfully.
 
+          WARNING_INFO: "WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
           
           ALERT_COOLDOWN_SECONDS: "3600"
           FAILURE_MESSAGE_TYPE: |
             Manifest metadata processing has failed due to a {failure_type}.
             Error: {error}
 
-            "WARNING_INFO: WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
-
+            
 
       VpcConfig:
         SubnetIds:
