@@ -106,7 +106,7 @@ Resources:
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
           ENVIRONMENT: !Ref Env
-          PARTNER_1_BUCKET: !ImportValue
+          PARTNER_1_BUCKET_ARN: !ImportValue
             Fn::Sub: OracleDocumentUploadsBucketArn-${Env}
 
       VpcConfig:
