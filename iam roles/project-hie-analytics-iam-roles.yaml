@@ -135,8 +135,12 @@ Resources:
               - Effect: Allow
                 Action:
                   - sns:Publish
-                Resource: !ImportValue
-                  Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+                Resource: 
+                  - Fn::ImportValue:
+                      Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+                  - Fn::ImportValue:
+                      Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
+                      
 
         - PolicyName: !Sub project-hie-analytics-lambda-invoke-notification-${Env}
           PolicyDocument:
