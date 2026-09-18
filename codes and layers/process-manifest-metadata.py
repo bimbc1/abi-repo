@@ -43,9 +43,16 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 def invoke_retry_handler(error, event):
+    if isinstance(error, DatabaseConnectionError):
+        retry_metric_name = "DatabaseConnectionRetries"
+    elif isinstance(error, SQSPublishError):
+        retry_metric_name = "SQSPublishRetries"
+    else:
+        retry_metric_name = "SNSRetries"
+
     put_metric(
         namespace="HIE/OperationalMonitoring",
-        metric_name="Retries",
+        metric_name=retry_metric_name,
         value=1
     )
     try:
@@ -278,9 +285,6 @@ def _publish_operational_alert(subject, message, failure_category):
         )
         return True
 
-    except Exception:
-        logging.exception("Unable to publish metadata message")
-        return False
 
     except Exception:
         logging.error(
@@ -427,10 +431,8 @@ def publish_metadata_message(message_body, message_attributes=None):
         if message_attributes:
             request["MessageAttributes"] = message_attributes
 
-        return sqs.send_message(
-            message_body=request["MessageBody"],
-            message_attributes=request.get("MessageAttributes")
-        )
+        return sqs.send_message(**request)
+    
     except Exception as error:
         logging.exception("Unable to publish metadata message: %s", str(error))
 
