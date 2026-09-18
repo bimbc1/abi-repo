@@ -940,7 +940,20 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             batch_id
         )
         if not isinstance(e, DatabaseConnectionError):
-            send_processing_failure_sns(error=e, bucket=bucket, batch_id=batch_id, partner_name=partner_name)
+            _publish_operational_alert(
+                subject=f"CRITICAL: Manifest processing failed for batch {batch_id}",
+                message=(
+                    f"CRITICAL: Manifest processing failed for batch '{batch_id}'.\n"
+                    f"Failure category: General Processing Failure\n"
+                    f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+                    f"AWS Region: {AWS_REGION}\n"
+                    f"Bucket: {bucket}\n"
+                    f"Partner: {partner_name or 'Unknown'}\n"
+                    f"Error type: {type(e).__name__}\n"
+                    f"Error message: {str(e)}\n"
+                ),
+                failure_category="General Processing Failure",
+            )
         raise
     finally:
         if conn:
