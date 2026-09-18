@@ -68,8 +68,9 @@ Resources:
         - Key: va_vasi_id
           Value: "2238"
       FunctionName: !Sub project-hie-analytics-process-partner-onboarding-lambda-${Env}
-      Role: !ImportValue 
-        Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
+      Role: 
+        Fn::ImportValue: 
+          Fn::Sub: project-hie-analytics-lambda-full-access-role-arn-${Env}
       Runtime: python3.14
       Handler: index.lambda_handler
       MemorySize: 1024
