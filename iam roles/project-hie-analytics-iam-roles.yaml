@@ -180,7 +180,7 @@ Resources:
             Action: sts:AssumeRole
 
       Policies:
-        - PolicyName: lambda-hie-dlq-policy
+        - PolicyName: !Sub project-hie-analytics-insertion-lambda-dlq-policy-${Env}
           PolicyDocument:
             Version: '2012-10-17'
             Statement:
