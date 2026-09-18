@@ -560,9 +560,10 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
                 partner_id,
                 expected_interval_seconds,
                 breach_flag,
+                last_alert_at,
                 updated_at
             )
-            VALUES (%s, %s, FALSE, NOW())
+            VALUES (%s, %s, FALSE, NOW(), NOW())
             """,
             (partner_id, expected_interval_seconds),
         )
