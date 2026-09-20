@@ -56,8 +56,8 @@ Resources:
         S3Bucket: demo-bucket-idn
         S3Key: project-hie-analytics-retry-backoff.zip
 
-  # LAMBDA 1: PROCESS INSERTION LAMBDA
-  ProcessInsertionLambda:
+  # LAMBDA 1: PARTNER ONBOARDING LAMBDA
+  PartnerOnboardingLambda:
     Type: AWS::Lambda::Function
     Properties:
       Tags:
@@ -117,10 +117,11 @@ Resources:
           - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
 
 
+
 Outputs:
 
-  ProcessInsertionLambdaArn:
-    Value: !GetAtt ProcessInsertionLambda.Arn
+  PartnerOnboardingLambdaArn:
+    Description: ARN of the partner-onboarding Lambda  
+    Value: !GetAtt PartnerOnboardingLambda.Arn
     Export:
-      Name: !Sub process-insertion-lambda-arn-${Env}
-
+      Name: !Sub project-hie-analytics-partner-onboarding-lambda-arn-${Env}   
