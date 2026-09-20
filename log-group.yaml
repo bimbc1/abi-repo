@@ -1,0 +1,277 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'metrics for the Manifest Metadata Lambda function'
+
+Parameters:
+  LogGroupName:
+    Type: String
+    Default: /aws/lambda/project-hie-analytics-cdq-stg-process-payload-manifest-metadata
+    Description: 'log group name used to get the data'
+
+Resources:
+
+# HIE/OperationalMonitoring
+
+  DatabaseConnectionRetries:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "DatabaseConnectionRetries") }'
+      MetricTransformations:
+        - MetricName: DatabaseConnectionRetries
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  SQSPublishRetries:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "SQSPublishRetries") }'
+      MetricTransformations:
+        - MetricName: SQSPublishRetries
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  SNSRetries:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "SNSRetries") }'
+      MetricTransformations:
+        - MetricName: SNSRetries
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  RetryHandlerInvocationFailures:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "RetryHandlerInvocationFailures") }'
+      MetricTransformations:
+        - MetricName: RetryHandlerInvocationFailures
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  ActiveIncidents:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "ActiveIncidents") }'
+      MetricTransformations:
+        - MetricName: ActiveIncidents
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: FailureCategory
+              Value: "$.dimensions.FailureCategory"
+
+  DatabaseConnectionFailures:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "DatabaseConnectionFailures") }'
+      MetricTransformations:
+        - MetricName: DatabaseConnectionFailures
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  SNSNotificationsSent:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "SNSNotificationsSent") }'
+      MetricTransformations:
+        - MetricName: SNSNotificationsSent
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  CountMismatchEvents:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "CountMismatchEvents") }'
+      MetricTransformations:
+        - MetricName: CountMismatchEvents
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  CRUDFailures:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "CRUDFailures") }'
+      MetricTransformations:
+        - MetricName: CRUDFailures
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  ProcessingDelaySeconds:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "ProcessingDelaySeconds") }'
+      MetricTransformations:
+        - MetricName: ProcessingDelaySeconds
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Seconds
+
+  S3ObjectArrivals:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "S3ObjectArrivals") }'
+      MetricTransformations:
+        - MetricName: S3ObjectArrivals
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  MetadataMessagesSentToSQS:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "MetadataMessagesSentToSQS") }'
+      MetricTransformations:
+        - MetricName: MetadataMessagesSentToSQS
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  ArchiveStatus:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "ArchiveStatus") }'
+      MetricTransformations:
+        - MetricName: ArchiveStatus
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: Bucket
+              Value: "$.dimensions.Bucket"
+            - Key: Status
+              Value: "$.dimensions.Status"
+
+  UnrecognizedBatchTypeEvents:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "UnrecognizedBatchTypeEvents") }'
+      MetricTransformations:
+        - MetricName: UnrecognizedBatchTypeEvents
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  ServiceAvailability:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "ServiceAvailability") }'
+      MetricTransformations:
+        - MetricName: ServiceAvailability
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  AccessDeniedEvents:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "AccessDeniedEvents") }'
+      MetricTransformations:
+        - MetricName: AccessDeniedEvents
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  MetadataLambdaFailures:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "MetadataLambdaFailures") }'
+      MetricTransformations:
+        - MetricName: MetadataLambdaFailures
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+
+  Latency:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "Latency") }'
+      MetricTransformations:
+        - MetricName: Latency
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Seconds
+
+# HIE/PartnerMonitoring
+
+  PartnerTransmissionReceived:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "PartnerTransmissionReceived") }'
+      MetricTransformations:
+        - MetricName: PartnerTransmissionReceived
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: PartnerId
+              Value: "$.dimensions.PartnerId"
+
+  StaleConnection:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "StaleConnection") }'
+      MetricTransformations:
+        - MetricName: StaleConnection
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: PartnerId
+              Value: "$.dimensions.PartnerId"
+
+  BytesIn:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "BytesIn") }'
+      MetricTransformations:
+        - MetricName: BytesIn
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Bytes
+          Dimensions:
+            - Key: PartnerName
+              Value: "$.dimensions.PartnerName"
+
+  FilesIn:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "FilesIn") }'
+      MetricTransformations:
+        - MetricName: FilesIn
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: PartnerName
+              Value: "$.dimensions.PartnerName"
