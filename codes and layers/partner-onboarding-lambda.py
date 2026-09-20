@@ -3,10 +3,27 @@ import json
 import logging
 import boto3
 import psycopg2
-import retry_utils
 import csv
 import io
 from botocore.exceptions import ClientError
+
+try:
+    import retry_utils
+except ImportError as e:
+    logging.getLogger().error(
+        "retry_utils layer missing or failed to import: %s", e
+    )
+
+    class _RetryUtilsFallback:
+        @staticmethod
+        def handle_retry(error, event):
+            logging.getLogger().error(
+                "Fallback handle_retry invoked -- retry_utils layer not "
+                "available. Error: %s | Event: %s", error, event
+            )
+            return False
+
+    retry_utils = _RetryUtilsFallback()
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
