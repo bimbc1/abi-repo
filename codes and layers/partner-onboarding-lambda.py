@@ -10,6 +10,8 @@ from botocore.exceptions import ClientError
 
 try:
     import retry_utils
+    if not hasattr(retry_utils, "handle_retry"):
+        raise ImportError("retry_utils module does not export handle_retry")
 except ImportError as e:
     logging.getLogger().error(
         "retry_utils layer missing or failed to import: %s", e
@@ -46,6 +48,7 @@ _CREDS_TTL_SECONDS = 900
 
 
 def invoke_retry_handler(error: Exception, event: dict) -> bool:
+    """Return True if the retry was successfully queued, False otherwise."""
     try:
         result = retry_utils.handle_retry(error, event)
         return bool(result)
@@ -57,7 +60,7 @@ def get_db_credentials():
     global _cached_creds, _cached_creds_expiry
     now = time.time()
     if _cached_creds and now < _cached_creds_expiry:
-        return _cached_creds 
+        return _cached_creds  
 
     secret_value = sm.get_secret_value(SecretId=DB_SECRET_ARN)
     creds = json.loads(secret_value["SecretString"])
@@ -73,8 +76,10 @@ def get_db_credentials():
 
 
 def get_conn():
+
     try:
         creds = get_db_credentials()
+
         return psycopg2.connect(
             host=creds["host"],
             port=creds["port"],
@@ -89,7 +94,7 @@ def get_conn():
         if isinstance(e, psycopg2.OperationalError) and "authentication failed" in str(e).lower():
             global _cached_creds, _cached_creds_expiry
             _cached_creds = None
-            _cached_creds_expiry = 0.0  
+            _cached_creds_expiry = 0.0  # force re-fetch on next call
 
         cloudwatch.put_metric_data(
             Namespace='HIE/OperationalMonitoring',
@@ -104,7 +109,8 @@ def get_conn():
 
         logger.exception("Database connection failure")
         raise
-        
+
+
 def lambda_handler(event, context):
     logger.info("Running partner contact insert lambda (final + schedule)")
 
@@ -120,7 +126,7 @@ def lambda_handler(event, context):
             "statusCode": 202,
             "body": json.dumps("Database connection failed; retry handler invoked.")
         }
-        
+
     try:
         with conn.cursor() as cur:
 
@@ -243,9 +249,10 @@ def lambda_handler(event, context):
                     cur.execute("""
                         INSERT INTO partner_schedule (
                             partner_id,
-                            expected_interval_seconds
+                            expected_interval_seconds,
+                            last_alert_at
                         )
-                        VALUES (%s, %s);
+                        VALUES (%s, %s, NOW());
                     """, (partner_id, 1800))
 
 
