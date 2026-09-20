@@ -38,18 +38,15 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 
 _cached_creds = None
 
-
-
 def invoke_retry_handler(error, event) -> bool:
     try:
-        retry_utils.handle_retry(error, event)
+        result = retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
-        return True
+        return bool(result)
 
     except Exception as e:
         logger.error(f"Retry handler invocation failed: {e}")
         return False
-
 
 # DB CONNECTION
 def get_db_credentials():
