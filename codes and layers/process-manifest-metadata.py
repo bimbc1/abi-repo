@@ -432,7 +432,7 @@ def publish_metadata_message(message_body, message_attributes=None):
             request["MessageAttributes"] = message_attributes
 
         return sqs.send_message(**request)
-    
+
     except Exception as error:
         logging.exception("Unable to publish metadata message: %s", str(error))
 
@@ -1134,17 +1134,21 @@ def send_metadata_to_sqs(message):
 
 # CLOUDWATCH METRICS
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
-    """Send CloudWatch metric."""
     try:
-        metric = {"MetricName": metric_name, "Value": value, "Unit": unit}
+        dims = {}
         if dimensions:
-            metric["Dimensions"] = dimensions
-        cloudwatch.put_metric_data(
-            Namespace=namespace,
-            MetricData=[metric]
-        )
+            for d in dimensions:
+                dims[d["Name"]] = d["Value"]
+        print(json.dumps({
+            "metric_log": True,
+            "namespace": namespace,
+            "metric_name": metric_name,
+            "value": value,
+            "unit": unit,
+            "dimensions": dims
+        }))
     except Exception as e:
-        logger.warning("Failed to publish CloudWatch metric %s: %s", metric_name, e)
+        logger.warning("Failed to log metric %s: %s", metric_name, e)
 
 
 # MAIN OBJECT PROCESSOR
