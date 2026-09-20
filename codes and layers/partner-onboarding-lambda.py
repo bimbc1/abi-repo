@@ -40,23 +40,14 @@ s3 = boto3.client("s3")
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 
 
-def invoke_retry_handler(error, event):
-    """Replaces the old send_to_dlq() call site. retry_utils is
-    imported at the top of this file from the Lambda Layer (same
-    pattern as psycopg2) -- no S3 download needed at runtime, since the
-    layer is already mounted at /opt by the time this code runs.
-
-    ASSUMPTION -- confirm this matches your actual layer's contents:
-    it's expected to expose a function `handle_retry(error, event)`.
-    Adjust the call below if your layer's function name differs.
-    """
+def invoke_retry_handler(error: Exception, event: dict) -> bool:
+    """Return True if the retry was successfully queued, False otherwise."""
     try:
-        retry_utils.handle_retry(error, event)
-        logger.info("Retry handler invoked successfully")
-
-    except Exception as e:
-        logger.error(f"Retry handler invocation failed: {e}")
-
+        result = retry_utils.handle_retry(error, event)
+        return bool(result)
+    except Exception as retry_err:
+        logger.exception(f"Retry handler itself failed: {retry_err}")
+        return False
 
 def get_db_credentials():
     secret_value = sm.get_secret_value(SecretId=DB_SECRET_ARN)
@@ -110,12 +101,13 @@ def lambda_handler(event, context):
         conn = get_conn()
     except Exception as e:
         logger.exception("Database connection failed")
-        invoke_retry_handler(e, event)
+        if not invoke_retry_handler(e, event):
+            raise
         return {
             "statusCode": 202,
             "body": json.dumps("Database connection failed; retry handler invoked.")
         }
-
+        
     try:
         with conn.cursor() as cur:
 
@@ -258,7 +250,8 @@ def lambda_handler(event, context):
     except Exception as e:
         conn.rollback()
         logger.exception("Error inserting partner contacts")
-        invoke_retry_handler(e, event)
+        if not invoke_retry_handler(e, event):
+            raise
         return {
             "statusCode": 500,
             "body": json.dumps(str(e))
