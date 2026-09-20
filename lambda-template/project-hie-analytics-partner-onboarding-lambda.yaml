@@ -77,21 +77,8 @@ Resources:
       Timeout: 300
 
       Code:
-        ZipFile: |
-          import json
-          import psycopg2
-          import os
-          import boto3
-
-          def lambda_handler(event, context):
-
-              secret_arn = os.environ['DB_SECRET_ARN']
-              host = os.environ['DB_HOST']
-
-              return {
-                  "statusCode": 200,
-                  "body": json.dumps("Lambda working with psycopg2 layer")
-              }     
+        S3Bucket: demo-bucket-idn                            
+        S3Key: partner-onboarding-lambda.zip
 
       Layers:
         - !Ref Psycopg2Layer
