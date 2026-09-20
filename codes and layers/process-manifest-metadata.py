@@ -8,7 +8,24 @@ from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 import boto3
 import psycopg2
-import retry_utils
+
+try:
+    import retry_utils
+except ImportError as e:
+    logging.getLogger().error(
+        "retry_utils layer missing or failed to import: %s", e
+    )
+
+    class _RetryUtilsFallback:
+        @staticmethod
+        def handle_retry(error, event):
+            logging.getLogger().error(
+                "Fallback handle_retry invoked -- retry_utils layer not "
+                "available. Error: %s | Event: %s", error, event
+            )
+            return False
+
+    retry_utils = _RetryUtilsFallback()
 
 logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
@@ -24,6 +41,9 @@ ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
 _last_alert_times = {}
+
+DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400  
+MIN_SAMPLES_BEFORE_LEARNING = 5            
 
 
 sns = boto3.client("sns", region_name=AWS_REGION)
@@ -123,7 +143,9 @@ def list_batch_keys(bucket, batch_id):
             kwargs["ContinuationToken"] = token
         resp = s3.list_objects_v2(**kwargs)
         for obj in resp.get("Contents", []):
-            keys.append(obj["Key"])
+            key = obj["Key"]
+            if extract_batch_id(os.path.basename(key)) == batch_id:  # tighten match
+                keys.append(key)
         if resp.get("IsTruncated"):
             token = resp.get("NextContinuationToken")
         else:
@@ -412,7 +434,8 @@ def get_conn():
             metric_name="DatabaseConnectionFailures",
             value=1
         )
-        raise DatabaseConnectionError("Manifest processing failed due to database connection error."
+        raise DatabaseConnectionError(
+            "Manifest processing failed due to database connection error."
         ) from error
 
 
@@ -903,6 +926,26 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
     }
 
 
+def get_partner_sample_count(cur, partner_id):
+    """Return how many prior batches have been recorded for this partner.
+
+    ASSUMPTION -- confirm this matches your schema: this counts rows in
+    manifest_batch for the partner, used to decide whether there is enough
+    history to learn expected_interval_seconds from actual elapsed time.
+    Adjust the query below if sample counts should be sourced differently.
+    """
+    cur.execute(
+        """
+        SELECT COUNT(*)
+        FROM manifest_batch
+        WHERE partner_id = %s
+        """,
+        (partner_id,),
+    )
+    row = cur.fetchone()
+    return row[0] if row else 0
+
+
 def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start):
     conn = None
     partner_id = partner_batch_key = environment = partner_name = None
@@ -918,7 +961,11 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             update_partner_state(cur, partner_id, latest_meta["key"])
 
             elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
-            expected_interval_seconds = max(1, int(round(elapsed_seconds)))
+            sample_count = get_partner_sample_count(cur, partner_id)
+            if sample_count < MIN_SAMPLES_BEFORE_LEARNING:
+                expected_interval_seconds = DEFAULT_EXPECTED_INTERVAL_SECONDS
+            else:
+                expected_interval_seconds = max(60, int(round(elapsed_seconds)))
 
             breach_cleared = clear_breach_flag(cur, partner_id, expected_interval_seconds)
         conn.commit()
@@ -1134,6 +1181,20 @@ def send_metadata_to_sqs(message):
 
 # CLOUDWATCH METRICS
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
+    """
+    Emit a structured JSON log line for this metric instead of calling
+    cloudwatch.put_metric_data() directly. CloudWatch Logs Metric Filters
+    (defined in CloudFormation, reading this Lambda's log group) turn these
+    log lines into the same CloudWatch custom metrics -- same namespace,
+    metric name, value, unit, and dimensions -- that were previously
+    published via the boto3 API call.
+
+    Uses print() rather than logger.info(): Lambda's default logging setup
+    prepends "[INFO]\\t<timestamp>\\t<request_id>\\t" before whatever
+    logger.info() is given, which would break JSON-pattern metric filter
+    matching (the filter requires the whole log line to parse as JSON).
+    print() writes the line as-is, with no prefix, regardless of LOG_LEVEL.
+    """
     try:
         dims = {}
         if dimensions:
