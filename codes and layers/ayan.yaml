@@ -1,0 +1,20 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 'metrics for the Manifest Metadata Lambda function'
+
+Parameters:
+  LogGroupName:
+    Type: String
+    Default: /aws/lambda/project-hie-analytics-cdq-stg-process-payload-manifest-metadata
+    Description: 'log group name used to get the data'
+
+# All metrics for this Lambda are now published directly from the Python
+# code via cloudwatch.put_metric_data() (see put_metric() in
+# manifest_metadata_lambda.py), the same way the partner Lambda does it.
+# The log-line + metric-filter pipeline this template used to define is no
+# longer needed -- the code stopped printing the "metric_log" JSON lines
+# these filters were matching on. Deploying this version removes all 26
+# filters that used to be defined here. If you don't need this stack for
+# anything else, deleting it entirely achieves the same result.
+
+Resources: {}
