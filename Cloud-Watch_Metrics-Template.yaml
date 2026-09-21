@@ -147,6 +147,20 @@ Resources:
           MetricValue: "$.value"
           Unit: Count
 
+  MetadataMessageTypesSentToSQS:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "MetadataMessageTypesSentToSQS") }'
+      MetricTransformations:
+        - MetricName: MetadataMessageTypesSentToSQS
+          MetricNamespace: HIE/OperationalMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: MessageType
+              Value: "$.dimensions.MessageType"
+
   ArchiveStatus:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -248,7 +262,46 @@ Resources:
             - Key: PartnerId
               Value: "$.dimensions.PartnerId"
 
-  BytesIn:
+  PartnerErrors:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "Errors") }'
+      MetricTransformations:
+        - MetricName: Errors
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: PartnerName
+              Value: "$.dimensions.PartnerName"
+
+  PartnerRecovered:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "PartnerRecovered") }'
+      MetricTransformations:
+        - MetricName: PartnerRecovered
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Count
+          Dimensions:
+            - Key: PartnerName
+              Value: "$.dimensions.PartnerName"
+
+  BytesInAggregate:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref LogGroupName
+      FilterPattern: '{ ($.metric_log = true) && ($.metric_name = "BytesIn") }'
+      MetricTransformations:
+        - MetricName: BytesIn
+          MetricNamespace: HIE/PartnerMonitoring
+          MetricValue: "$.value"
+          Unit: Bytes
+
+  BytesInPerPartner:
     Type: AWS::Logs::MetricFilter
     Properties:
       LogGroupName: !Ref LogGroupName
