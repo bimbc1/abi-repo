@@ -1070,20 +1070,29 @@ def send_metadata_to_sqs(message):
     # ---CLOUDWATCH METRICS---
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
     try:
-        dims = {}
+        metric_data = {
+            "MetricName": metric_name,
+            "Value": value,
+            "Unit"; unit,
+        }
         if dimensions:
-            for d in dimensions:
-                dims[d["Name"]] = d["Value"]
-        print(json.dumps({
-            "metric_log": True,
-            "namespace": namespace,
-            "metric_name": metric_name,
-            "value": value,
-            "unit": unit,
-            "dimensions": dims
-        }))
+            metric_data["Dimensions"] = dimensions
+        cloudwatch.put_metric_data(
+            Namespace=namespace,
+            MetricData=[metric_data]
+        )
+        logger.info(
+            "Published CloudWatch metric: namespace=%s metric=%s value=%s",
+            namespace,
+            metric_name,
+            value
+        )
     except Exception as e:
-        logger.warning("Failed to log metric %s: %s", metric_name, e)
+        logger.warning(
+            "Failed to publish CloudWatch metric %s: %s", 
+            metric_name, 
+            e
+        )
     # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
