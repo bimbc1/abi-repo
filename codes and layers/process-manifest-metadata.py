@@ -134,7 +134,10 @@ def list_batch_keys(bucket, batch_id):
             token = resp.get("NextContinuationToken")
         else:
             break
-    return keys
+    return [
+        k for k in keys
+        if extract_batch_id(os.path.basename(k)) == batch_id
+    ]
     # --- BATCH FILE PAIR SELECTION ---
 def find_available_keys(bucket, batch_id, batch_type):
     keys = list_batch_keys(bucket, batch_id)
