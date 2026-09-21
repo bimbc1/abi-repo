@@ -4,9 +4,6 @@ import logging
 import time
 import boto3
 import psycopg2
-import csv
-import io
-from botocore.exceptions import ClientError
     # ---RETRY UTILITY IMPORT WITH FALLBACK---
 try:
     import retry_utils
@@ -37,7 +34,6 @@ AWS_REGION              = os.environ.get("AWS_REGION", "us-gov-west-1")
 PARTNER_1_BUCKET_ARN    = os.environ["PARTNER_1_BUCKET"]
     # ---AWS CLIENTS---
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-s3 = boto3.client("s3")
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
     # ---CREDENTIALS CACHING---
 _cached_creds = None
