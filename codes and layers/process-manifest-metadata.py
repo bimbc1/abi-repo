@@ -8,14 +8,13 @@ from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 import boto3
 import psycopg2
-
+    # ---RETRY UTILITY IMPORT WITH FALLBACK---
 try:
     import retry_utils
 except ImportError as e:
     logging.getLogger().error(
         "retry_utils layer missing or failed to import: %s", e
     )
-
     class _RetryUtilsFallback:
         @staticmethod
         def handle_retry(error, event):
@@ -24,44 +23,34 @@ except ImportError as e:
                 "available. Error: %s | Event: %s", error, event
             )
             return False
-
     retry_utils = _RetryUtilsFallback()
-
+    # --SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
 logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
-
-AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
-
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
-FAILURE_MESSAGE_TYPE = os.environ.get(
+ # --ENVIRONMENT VARIABLES---
+AWS_REGION               = os.environ.get("AWS_REGION", "us-gov-west-1")
+SNS_TOPIC_ARN            = os.environ.get("SNS_TOPIC_ARN")
+FAILURE_MESSAGE_TYPE     = os.environ.get(
     "FAILURE_MESSAGE_TYPE"
 )
-
 ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
 _last_alert_times = {}
-
-DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400  
-MIN_SAMPLES_BEFORE_LEARNING = 5            
-
-
+DEFAULT_EXPECTED_INTERVAL_SECONDS   = 86400  
+MIN_SAMPLES_BEFORE_LEARNING         = 5            
 sns = boto3.client("sns", region_name=AWS_REGION)
-
-METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
-
-DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
-DB_HOST = os.environ["DB_HOST"]
-DB_PORT = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME = os.environ.get("DB_NAME")
-
-
-
+METADATA_QUEUE_URL  = os.environ["METADATA_QUEUE_URL"]
+DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
+DB_HOST             = os.environ["DB_HOST"]
+DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
+DB_NAME             = os.environ.get("DB_NAME")
+    # --AWS CLIENTS---
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-
+    # ---CREATING RETRY HANDLER FUNCTION---
 def invoke_retry_handler(error, event):
     if isinstance(error, DatabaseConnectionError):
         retry_metric_name = "DatabaseConnectionRetries"
@@ -69,7 +58,7 @@ def invoke_retry_handler(error, event):
         retry_metric_name = "SQSPublishRetries"
     else:
         retry_metric_name = "SNSRetries"
-
+        # ---PUTTING METRIC FOR RETRY---
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name=retry_metric_name,
@@ -79,7 +68,6 @@ def invoke_retry_handler(error, event):
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
         return True
-
     except Exception as e:
         logger.error(f"Retry handler invocation failed: {e}")
         put_metric(
@@ -88,35 +76,32 @@ def invoke_retry_handler(error, event):
             value=1
         )
         return False
-
-
-# COMMON HELPERS
+    # ---HELPER FUNCTIONS---
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
-
-
 def extract_batch_id(filename):
     parts = filename.split("_")
-    return "_".join(parts[:2])
-
-
-# FILE NAME MATCHING
+    markers = {
+        "inbound",
+        "outbound",
+        "received",
+        "disclosure",
+        "disclo",
+    }
+    for index, part in enumerate(parts):
+        if part.lower() in markers:
+            return "_".join(parts[:index])
+    return "_".join(parts[:2]) if len(parts) >= 2 else parts[0]
+    # --- FILE TYPE DETECTION ---
 def is_manifest_file(filename):
     return filename.lower().endswith("manifest.txt")
-
-
 def is_report_file(filename):
     return filename.lower().endswith("report.txt")
-
-
 def is_zip_file(filename):
     return filename.lower().endswith("ccda.zip")
-
-
 def is_target_file(filename):
     return is_manifest_file(filename) or is_report_file(filename) or is_zip_file(filename)
-
-
+    # --- BATCH TYPE CLASSIFICATION ---
 def classify_batch_type(filename):
     lower = filename.lower()
     if is_manifest_file(filename):
@@ -132,8 +117,7 @@ def classify_batch_type(filename):
             return "DISCLOSURE"
         return None
     return None
-
-
+    # --- S3 BATCH FILE DISCOVERY ---
 def list_batch_keys(bucket, batch_id):
     keys = []
     token = None
@@ -151,8 +135,7 @@ def list_batch_keys(bucket, batch_id):
         else:
             break
     return keys
-
-
+    # --- BATCH FILE PAIR SELECTION ---
 def find_available_keys(bucket, batch_id, batch_type):
     keys = list_batch_keys(bucket, batch_id)
     manifest_key = None
@@ -187,8 +170,6 @@ def find_available_keys(bucket, batch_id, batch_type):
             ignored_files,
         )
     return manifest_key, report_key, zip_key
-
-
 def get_object_metadata(bucket, key):
     """Get metadata for an S3 object."""
     if not key:
@@ -201,13 +182,10 @@ def get_object_metadata(bucket, key):
         "last_modified_utc": head["LastModified"].astimezone(timezone.utc).isoformat(),
         "etag": head.get("ETag", "").replace('"', "")
     }
-
-
+    # --- S3 OBJECT PROCESSING TAGS ---
 PROCESSED_TAG_VALUE = "true"
 MANIFEST_SENT_TAG_KEY = "manifest-metadata-sent"
 REPORT_SENT_TAG_KEY = "report-metadata-sent"
-
-
 def _get_object_tags(bucket, key):
     try:
         tags = s3.get_object_tagging(Bucket=bucket, Key=key)
@@ -215,12 +193,8 @@ def _get_object_tags(bucket, key):
     except Exception as e:
         logger.warning("Could not read tags on %s: %s", key, e)
         return {}
-
-
 def is_message_already_sent(bucket, key, tag_key):
     return _get_object_tags(bucket, key).get(tag_key) == PROCESSED_TAG_VALUE
-
-
 def mark_message_as_sent(bucket, key, tag_key):
     try:
         tag_set = _get_object_tags(bucket, key)
@@ -232,23 +206,18 @@ def mark_message_as_sent(bucket, key, tag_key):
         )
     except Exception as e:
         logger.warning("Could not tag %s as sent (%s): %s", key, tag_key, e)
-
-
 def is_batch_already_sent(bucket, manifest_key):
     tag_set = _get_object_tags(bucket, manifest_key)
     return (
         tag_set.get(MANIFEST_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
         and tag_set.get(REPORT_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
     )
-
-
+    # --- CUSTOM EXCEPTIONS ---
 class DatabaseConnectionError(RuntimeError):
     """Raised when there is an error connecting to the database."""
-
 class SQSPublishError(RuntimeError):
     """Raised when there is an error publishing to the SQS queue."""
-
-
+    # --- OPERATIONAL ALERT COOLDOWN AND SNS ALERTING ---
 def _should_publish_alert(failure_category):
     """Determine whether an alert may be published for the category."""
     now = datetime.now(timezone.utc)
@@ -264,23 +233,17 @@ def _should_publish_alert(failure_category):
             )
             return False
     return True
-
 def _record_alert_time(failed_category):
-    """ Record the time when an alert was sent for a specific category. """
     _last_alert_times[failed_category] = datetime.now(timezone.utc)
-
 def _publish_operational_alert(subject, message, failure_category):
-    """Publish an alert to the SNS topic if the cooldown has passed."""
     if not SNS_TOPIC_ARN:
         logging.error(
             "SNS_TOPIC_ARN is not configured. Cannot publish alert for category '%s'.",
             failure_category,
         )
         return False
-
     if not _should_publish_alert(failure_category):
         return False
-
     try:
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
@@ -306,8 +269,6 @@ def _publish_operational_alert(subject, message, failure_category):
             dimensions=[{"Name": "FailureCategory", "Value": failure_category}]
         )
         return True
-
-
     except Exception:
         logging.error(
             "Failed to publish alert to SNS topic '%s' for category '%s'.",
@@ -316,7 +277,6 @@ def _publish_operational_alert(subject, message, failure_category):
             exc_info=True,
         )
         return False
-
 def notify_database_connection_failure(failure_category, error_message):
     request_id = (
         getattr(globals().get("context"), "aws_request_id", None)
@@ -338,7 +298,6 @@ def notify_database_connection_failure(failure_category, error_message):
             message = None
     else:
         message = None
-
     if message is None:
         message = (
             f"CRITICAL: manifest processing failed for category '{failure_category}' due to database connection error.\n"
@@ -357,7 +316,6 @@ def notify_database_connection_failure(failure_category, error_message):
         message=message,
         failure_category="Database Connection Failure",
     )
-
 def notify_sqs_publish_failure(error, context=None):
     request_id = (
         getattr(context, "aws_request_id", None)
@@ -398,34 +356,29 @@ def notify_sqs_publish_failure(error, context=None):
         message=message,
         failure_category="SQS Publish Failure",
     )
-
 def route_critical_failure_notification(error, context=None):
-    """Route critical failure notifications based on the error type."""
     if isinstance(error, DatabaseConnectionError):
         return notify_database_connection_failure("Database Connection Failure", error)
     if isinstance(error, SQSPublishError):
         return notify_sqs_publish_failure(error, context)
-
     logging.debug(
         "Error message does not match any known critical failure types. No alert will be sent. "
         "Error type: %s",
         type(error).__name__,
     )
     return False
-
+    # ---ESTABLISHING CONNECTION TO DATABASE---
 def get_conn():
-    """ Establish a connection to the Aurora database using psycopg2. """
     try:
         secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
         creds = json.loads(secret['SecretString'])
-
         return psycopg2.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            dbname=DB_NAME,
-            user=creds['username'],
-            password=creds['password'],
-            connect_timeout=10,
+            host            =DB_HOST,
+            port            =DB_PORT,
+            dbname          =DB_NAME,
+            user            =creds['username'],
+            password        =creds['password'],
+            connect_timeout =10,
         )
     except Exception as error:
         logging.exception("Unable to connect to the database: %s", str(error))
@@ -437,10 +390,7 @@ def get_conn():
         raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
         ) from error
-
-
-# SQS MESSAGE HELPERS
-
+    # ---SQS MESSAGE HELPERS---
 def publish_metadata_message(message_body, message_attributes=None):
     try:
         if not METADATA_QUEUE_URL:
@@ -453,15 +403,11 @@ def publish_metadata_message(message_body, message_attributes=None):
         }
         if message_attributes:
             request["MessageAttributes"] = message_attributes
-
         return sqs.send_message(**request)
-
     except Exception as error:
         logging.exception("Unable to publish metadata message: %s", str(error))
-
         raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
-
-
+    # --FINDING PARTNER INFORMATION FROM DATABASE---
 def get_partner_info(cur, bucket_name):
     bucket_arn = f"arn:aws-us-gov:s3:::{bucket_name}"
     cur.execute(
@@ -476,8 +422,7 @@ def get_partner_info(cur, bucket_name):
     if not row:
         raise RuntimeError(f"No partner registered for bucket ARN {bucket_arn}")
     return row[0], row[1], row[2]
-
-
+    #---FINDING PARTNER NAME---
 def get_partner_name(cur, partner_id):
     cur.execute(
         """
@@ -490,8 +435,7 @@ def get_partner_name(cur, partner_id):
     )
     row = cur.fetchone()
     return row[0] if row else f"Partner {partner_id}"
-
-
+    # --- PARTNER TRANSMISSION STATE TRACKING ---
 def update_partner_state(cur, partner_id, object_key):
     now = datetime.now(timezone.utc)
     filename = os.path.basename(object_key)
@@ -563,8 +507,7 @@ def update_partner_state(cur, partner_id, object_key):
                 unit="Count",
                 dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
             )
-
-
+    # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id, expected_interval_seconds):
     cur.execute(
         """
@@ -575,7 +518,6 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
         (partner_id,),
     )
     row = cur.fetchone()
-
     if row is None:
         cur.execute(
             """
@@ -597,7 +539,6 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
             expected_interval_seconds
         )
         return False
-
     if row[0]:
         cur.execute(
             """
@@ -611,7 +552,6 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
         )
         logger.info("Recovery detected. Breach cleared for partner_id=%s", partner_id)
         return True
-
     cur.execute(
         """
         UPDATE partner_schedule
@@ -627,8 +567,7 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
         partner_id
     )
     return False
-
-
+    # --- SNS MESSAGE TEMPLATE RENDERING ---
 def render_sns_template(template, partner_name, environment):
     rendered = template.replace("$PARTNER_NAME", str(partner_name)).replace(
         "$ENVIRONMENT", str(environment)
@@ -638,8 +577,7 @@ def render_sns_template(template, partner_name, environment):
     except (KeyError, IndexError):
         pass
     return rendered
-
-
+    # --- RECOVERY SNS NOTIFICATION ---
 def send_recovery_sns(partner_name, partner_id, environment):
     if not SNS_TOPIC_ARN:
         logger.warning("SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
@@ -663,9 +601,7 @@ def send_recovery_sns(partner_name, partner_id, environment):
             "SNS notification failed for partner_id=%s, but database changes were already committed.",
             partner_id,
         )
-
-
-# FILE VALIDATION AND COUNTING
+    # ---FILE VALIDATION AND COUNTING---
 def read_manifest_expected_counts(bucket, key):
     """Read the manifest file and extract expected counts."""
     obj = s3.get_object(Bucket=bucket, Key=key)
@@ -682,16 +618,13 @@ def read_manifest_expected_counts(bucket, key):
     if not counts:
         raise ValueError(f"Manifest contains no counts: {key}")
     return counts
-
-
+    # --- S3 RANGE READER FOR ZIP FILES ---
 class _S3RangeReader:
-
     def __init__(self, bucket, key, size):
         self._bucket = bucket
         self._key = key
         self._size = size
         self._pos = 0
-
     def read(self, size=-1):
         if size is None or size < 0:
             end = self._size - 1
@@ -707,7 +640,6 @@ class _S3RangeReader:
         data = resp["Body"].read()
         self._pos += len(data)
         return data
-
     def seek(self, offset, whence=0):
         if whence == 0:
             self._pos = offset
@@ -718,20 +650,14 @@ class _S3RangeReader:
         else:
             raise ValueError(f"Unsupported whence: {whence}")
         return self._pos
-
     def tell(self):
         return self._pos
-
     def seekable(self):
         return True
-
-
 def count_zip(bucket, key):
     size = s3.head_object(Bucket=bucket, Key=key)["ContentLength"]
     with zipfile.ZipFile(_S3RangeReader(bucket, key, size)) as z:
         return len([f for f in z.namelist() if not f.endswith("/")])
-
-
 def count_report_rows(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
@@ -739,8 +665,7 @@ def count_report_rows(bucket, key):
     if not lines:
         return 0
     return sum(1 for line in lines[1:] if line.strip())
-
-
+    # --- RECEIVED REPORT ROW EXTRACTION ---
 def extract_received_report_rows(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
@@ -772,8 +697,7 @@ def extract_received_report_rows(bucket, key):
             "ccda_file": parts[14],
         })
     return rows
-
-
+    # --- DISCLOSURE REPORT ROW EXTRACTION ---
 def extract_disclosure_report_rows(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
@@ -808,9 +732,7 @@ def extract_disclosure_report_rows(bucket, key):
             "commonwell_indicator": parts[17],
         })
     return rows
-
-
-# SQS MESSAGE BUILDERS
+    # ---SQS MESSAGE BUILDERS---
 def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta, zip_meta,
                                      manifest_expected_counts, partner_context):
     zip_actual_count = count_zip(bucket, zip_meta["key"])
@@ -829,7 +751,6 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             metric_name="CountMismatchEvents",
             value=1
         )
-
     return {
         "message_type": "MANIFEST_METADATA_UPSERT",
         "schema_version": "2.0",
@@ -861,8 +782,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "bytes_in": bytes_in
         }
     }
-
-
+    # --- PARTNER SCHEDULE LEARNING SUPPORT ---
 def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta,
                                            manifest_expected_counts, partner_context):
     report_key = report_meta["key"]
@@ -878,14 +798,12 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
     }
     bytes_in = sum(item.get("size_bytes", 0) for item in file_metadata.values() if item)
     validation_status = "READY_FOR_DATABASE_SQS_INSERT" if report_matches_manifest else "COUNT_MISMATCH"
-
     if not report_matches_manifest:
         put_metric(
             namespace="HIE/OperationalMonitoring",
             metric_name="CountMismatchEvents",
             value=1
         )
-
     return {
         "message_type": "PATIENT_REPORT_METADATA_UPSERT",
         "schema_version": "2.0",
@@ -924,16 +842,8 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "files_in": report_actual_count
         }
     }
-
-
+    # --- PARTNER SCHEDULE LEARNING SUPPORT ---
 def get_partner_sample_count(cur, partner_id):
-    """Return how many prior batches have been recorded for this partner.
-
-    ASSUMPTION -- confirm this matches your schema: this counts rows in
-    manifest_batch for the partner, used to decide whether there is enough
-    history to learn expected_interval_seconds from actual elapsed time.
-    Adjust the query below if sample counts should be sourced differently.
-    """
     cur.execute(
         """
         SELECT COUNT(*)
@@ -944,8 +854,7 @@ def get_partner_sample_count(cur, partner_id):
     )
     row = cur.fetchone()
     return row[0] if row else 0
-
-
+    # --- PARTNER STATE AND BREACH SYNCHRONIZATION ---
 def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start):
     conn = None
     partner_id = partner_batch_key = environment = partner_name = None
@@ -955,18 +864,15 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         with conn.cursor() as cur:
             partner_id, partner_batch_key, environment = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
-
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
             update_partner_state(cur, partner_id, latest_meta["key"])
-
             elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
             sample_count = get_partner_sample_count(cur, partner_id)
             if sample_count < MIN_SAMPLES_BEFORE_LEARNING:
                 expected_interval_seconds = DEFAULT_EXPECTED_INTERVAL_SECONDS
             else:
                 expected_interval_seconds = max(60, int(round(elapsed_seconds)))
-
             breach_cleared = clear_breach_flag(cur, partner_id, expected_interval_seconds)
         conn.commit()
     except Exception as e:
@@ -1008,10 +914,8 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     finally:
         if conn:
             conn.close()
-
     if breach_cleared:
         send_recovery_sns(partner_name, partner_id, environment)
-
     put_metric(
         namespace="HIE/PartnerMonitoring",
         metric_name="PartnerRecovered",
@@ -1019,19 +923,16 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         unit="Count",
         dimensions=[{"Name": "PartnerName", "Value": partner_name}]
     )
-
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
         "environment": environment,
         "partner_name": partner_name,
     }
-
-
+    # --- METADATA MESSAGE ORCHESTRATION ---
 def build_metadata_messages(bucket, trigger_key, processing_start):
     filename = os.path.basename(trigger_key)
     batch_id = extract_batch_id(filename)
-
     batch_type = classify_batch_type(filename)
     if batch_type is None:
         logger.warning(
@@ -1048,7 +949,6 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
             value=1
         )
         return None
-
     manifest_key, report_key, zip_key = find_available_keys(bucket, batch_id, batch_type)
     logger.info(
         "Batch %s | type=%s | availability: manifest=%s report=%s zip=%s",
@@ -1058,7 +958,6 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         bool(report_key),
         bool(zip_key)
     )
-
     if not manifest_key or not report_key or not zip_key:
         missing_files = []
         if not manifest_key:
@@ -1074,15 +973,12 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
             ", ".join(missing_files)
         )
         return None
-
     if is_batch_already_sent(bucket, manifest_key):
         logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type)
         return None
-
     manifest_meta = get_object_metadata(bucket, manifest_key)
     report_meta = get_object_metadata(bucket, report_key)
     zip_meta = get_object_metadata(bucket, zip_key)
-
     manifest_expected_counts = read_manifest_expected_counts(bucket, manifest_key)
     logger.info(
         "Batch %s | type=%s | Manifest expected counts | CCDA=%d | REPORT=%d",
@@ -1091,11 +987,9 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         manifest_expected_counts.get("CCDA", 0),
         manifest_expected_counts.get("REPORT", 0),
     )
-
     partner_context = sync_partner_state_and_breach_flag(
         bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start
     )
-
     manifest_message = build_manifest_metadata_message(
         bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context
     )
@@ -1103,9 +997,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta, manifest_expected_counts, partner_context
     )
     return manifest_message, report_message, manifest_key
-
-
-# SQS SENDER
+    # ---SQS SENDER---
 def send_metadata_to_sqs(message):
     """Send a metadata message to SQS."""
     message_body = json.dumps(message, default=str)
@@ -1145,7 +1037,6 @@ def send_metadata_to_sqs(message):
             message["message_type"]
         )
         raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="MetadataMessageTypesSentToSQS",
@@ -1175,26 +1066,9 @@ def send_metadata_to_sqs(message):
                 unit="Count",
                 dimensions=[{"Name": "PartnerName", "Value": partner_name}]
             )
-
     return response
-
-
-# CLOUDWATCH METRICS
+    # ---CLOUDWATCH METRICS---
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
-    """
-    Emit a structured JSON log line for this metric instead of calling
-    cloudwatch.put_metric_data() directly. CloudWatch Logs Metric Filters
-    (defined in CloudFormation, reading this Lambda's log group) turn these
-    log lines into the same CloudWatch custom metrics -- same namespace,
-    metric name, value, unit, and dimensions -- that were previously
-    published via the boto3 API call.
-
-    Uses print() rather than logger.info(): Lambda's default logging setup
-    prepends "[INFO]\\t<timestamp>\\t<request_id>\\t" before whatever
-    logger.info() is given, which would break JSON-pattern metric filter
-    matching (the filter requires the whole log line to parse as JSON).
-    print() writes the line as-is, with no prefix, regardless of LOG_LEVEL.
-    """
     try:
         dims = {}
         if dimensions:
@@ -1210,11 +1084,8 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
         }))
     except Exception as e:
         logger.warning("Failed to log metric %s: %s", metric_name, e)
-
-
-# MAIN OBJECT PROCESSOR
+    # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
-    """Process a single S3 object."""
     filename = os.path.basename(key)
     event_time = datetime.fromisoformat(
         record["eventTime"].replace("Z", "+00:00")
@@ -1228,42 +1099,34 @@ def process_object(bucket, key, record):
         unit="Seconds"
     )
     logger.info("Processing delay=%s seconds", processing_delay)
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="S3ObjectArrivals",
         value=1
     )
-
     if not is_target_file(filename):
         logger.info("Skipping non-target file: %s", filename)
         return {"processed": False, "reason": "NON_TARGET_FILE"}
-
     result = build_metadata_messages(bucket, key, processing_start)
     if result is None:
         return {"processed": False, "reason": "BATCH_NOT_READY_OR_ALREADY_SENT"}
     manifest_message, report_message, manifest_key = result
-
     batch_id = manifest_message["source"]["batch_id"]
-
     if not is_message_already_sent(bucket, manifest_key, MANIFEST_SENT_TAG_KEY):
         send_metadata_to_sqs(manifest_message)
         mark_message_as_sent(bucket, manifest_key, MANIFEST_SENT_TAG_KEY)
     else:
         logger.info("Batch %s | manifest message already sent, skipping duplicate send.", batch_id)
-
     if not is_message_already_sent(bucket, manifest_key, REPORT_SENT_TAG_KEY):
         send_metadata_to_sqs(report_message)
         mark_message_as_sent(bucket, manifest_key, REPORT_SENT_TAG_KEY)
     else:
         logger.info("Batch %s | report message already sent, skipping duplicate send.", batch_id)
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="MetadataMessagesSentToSQS",
         value=1
     )
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="ArchiveStatus",
@@ -1278,9 +1141,7 @@ def process_object(bucket, key, record):
         "reason": "METADATA_SENT_TO_SQS",
         "batch_id": manifest_message["source"]["batch_id"]
     }
-
-
-# LAMBDA ENTRY
+    # ---MAIN LAMBDA HANDLER---
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
     invocation_start = datetime.now(timezone.utc)
@@ -1330,9 +1191,7 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
-
             route_critical_failure_notification(e, record)
-
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
