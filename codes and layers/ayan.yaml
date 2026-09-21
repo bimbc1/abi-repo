@@ -1,20 +1,297 @@
 ---
 AWSTemplateFormatVersion: "2010-09-09"
-Description: 'metrics for the Manifest Metadata Lambda function'
+Description: >-
+  Alarms and dashboard for the Manifest Metadata Lambda's CloudWatch
+  metrics. These metrics are published directly by the Lambda via
+  cloudwatch.put_metric_data() (see put_metric() in
+  manifest_metadata_lambda.py) -- this template does not create any
+  metrics itself, it only watches (Alarms) and displays (Dashboard) the
+  ones the Lambda is already publishing. Same pattern as the partner's
+  business-monitoring template.
 
 Parameters:
-  LogGroupName:
+  DashboardName:
     Type: String
-    Default: /aws/lambda/project-hie-analytics-cdq-stg-process-payload-manifest-metadata
-    Description: 'log group name used to get the data'
+    Default: ManifestMetadataMonitoring
+    Description: 'Name of the CloudWatch dashboard to create.'
 
-# All metrics for this Lambda are now published directly from the Python
-# code via cloudwatch.put_metric_data() (see put_metric() in
-# manifest_metadata_lambda.py), the same way the partner Lambda does it.
-# The log-line + metric-filter pipeline this template used to define is no
-# longer needed -- the code stopped printing the "metric_log" JSON lines
-# these filters were matching on. Deploying this version removes all 26
-# filters that used to be defined here. If you don't need this stack for
-# anything else, deleting it entirely achieves the same result.
+Resources:
 
-Resources: {}
+  # ---------------------------------------------------------------------
+  # ALARMS -- these watch metrics that already exist in CloudWatch. They
+  # do not care whether the metric was published by a direct API call or
+  # a log-filter; they just read the namespace + metric name.
+  # ---------------------------------------------------------------------
+
+  DatabaseConnectionFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-DatabaseConnectionFailures
+      AlarmDescription: 'Fires when the Manifest Metadata Lambda fails to connect to the database.'
+      Namespace: HIE/OperationalMonitoring
+      MetricName: DatabaseConnectionFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  MetadataLambdaFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-LambdaFailures
+      AlarmDescription: 'Fires when the Manifest Metadata Lambda fails while processing a record.'
+      Namespace: HIE/OperationalMonitoring
+      MetricName: MetadataLambdaFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  ServiceAvailabilityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-ServiceAvailability
+      AlarmDescription: 'Fires when the Lambda reports itself unavailable (retry handler also failed), or when it has not reported availability at all.'
+      Namespace: HIE/OperationalMonitoring
+      MetricName: ServiceAvailability
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+
+  CountMismatchEventsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-CountMismatchEvents
+      AlarmDescription: 'Fires when a batch''s actual file/row count does not match its manifest.'
+      Namespace: HIE/OperationalMonitoring
+      MetricName: CountMismatchEvents
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  RetryHandlerInvocationFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-RetryHandlerFailures
+      AlarmDescription: 'Fires when the retry_utils handler itself fails to run -- no retry is guaranteed for the underlying error.'
+      Namespace: HIE/OperationalMonitoring
+      MetricName: RetryHandlerInvocationFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # ---------------------------------------------------------------------
+  # DASHBOARD -- displays the metrics above plus the rest of what the
+  # Lambda publishes, grouped the same way the code groups them
+  # (HIE/OperationalMonitoring vs HIE/PartnerMonitoring).
+  # ---------------------------------------------------------------------
+
+  ManifestMetadataDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Ref DashboardName
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "text",
+              "x": 0, "y": 0, "width": 24, "height": 1,
+              "properties": { "markdown": "## Operational Health" }
+            },
+            {
+              "type": "alarm",
+              "x": 0, "y": 1, "width": 24, "height": 3,
+              "properties": {
+                "title": "Alarm status",
+                "alarms": [
+                  "${DatabaseConnectionFailuresAlarm.Arn}",
+                  "${MetadataLambdaFailuresAlarm.Arn}",
+                  "${ServiceAvailabilityAlarm.Arn}",
+                  "${CountMismatchEventsAlarm.Arn}",
+                  "${RetryHandlerInvocationFailuresAlarm.Arn}"
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 4, "width": 12, "height": 6,
+              "properties": {
+                "title": "Failures",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["HIE/OperationalMonitoring", "DatabaseConnectionFailures"],
+                  ["HIE/OperationalMonitoring", "MetadataLambdaFailures"],
+                  ["HIE/OperationalMonitoring", "CRUDFailures"],
+                  ["HIE/OperationalMonitoring", "AccessDeniedEvents"],
+                  ["HIE/OperationalMonitoring", "UnrecognizedBatchTypeEvents"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 4, "width": 12, "height": 6,
+              "properties": {
+                "title": "Retries",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["HIE/OperationalMonitoring", "DatabaseConnectionRetries"],
+                  ["HIE/OperationalMonitoring", "SQSPublishRetries"],
+                  ["HIE/OperationalMonitoring", "SNSRetries"],
+                  ["HIE/OperationalMonitoring", "RetryHandlerInvocationFailures"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 10, "width": 8, "height": 6,
+              "properties": {
+                "title": "Service availability",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Minimum",
+                "metrics": [
+                  ["HIE/OperationalMonitoring", "ServiceAvailability"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 8, "y": 10, "width": 8, "height": 6,
+              "properties": {
+                "title": "Processing delay / latency (seconds)",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Average",
+                "metrics": [
+                  ["HIE/OperationalMonitoring", "ProcessingDelaySeconds"],
+                  ["HIE/OperationalMonitoring", "Latency"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 16, "y": 10, "width": 8, "height": 6,
+              "properties": {
+                "title": "Active incidents by category",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{HIE/OperationalMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)", "id": "e1", "label": "" } ]
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "x": 0, "y": 16, "width": 24, "height": 1,
+              "properties": { "markdown": "## Processing & Volume" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 17, "width": 12, "height": 6,
+              "properties": {
+                "title": "S3 arrivals / SQS messages sent",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  ["HIE/OperationalMonitoring", "S3ObjectArrivals"],
+                  ["HIE/OperationalMonitoring", "MetadataMessagesSentToSQS"],
+                  ["HIE/OperationalMonitoring", "SNSNotificationsSent"],
+                  ["HIE/OperationalMonitoring", "CountMismatchEvents"]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 17, "width": 12, "height": 6,
+              "properties": {
+                "title": "SQS message types sent",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{HIE/OperationalMonitoring,MessageType} MetricName=\"MetadataMessageTypesSentToSQS\"', 'Sum', 300)", "id": "e2", "label": "" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 23, "width": 24, "height": 6,
+              "properties": {
+                "title": "Archive status by bucket (1 = success, 0 = failure)",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{HIE/OperationalMonitoring,Bucket,Status} MetricName=\"ArchiveStatus\"', 'Sum', 300)", "id": "e3", "label": "" } ]
+                ]
+              }
+            },
+            {
+              "type": "text",
+              "x": 0, "y": 29, "width": 24, "height": 1,
+              "properties": { "markdown": "## Partner Monitoring" }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 30, "width": 12, "height": 6,
+              "properties": {
+                "title": "Transmissions received / stale connections by partner",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"PartnerTransmissionReceived\"', 'Sum', 300)", "id": "e4", "label": "" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum', 300)", "id": "e5", "label": "" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 12, "y": 30, "width": 12, "height": 6,
+              "properties": {
+                "title": "Bytes in / files in / files out by partner",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BytesIn\"', 'Sum', 300)", "id": "e6", "label": "" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)", "id": "e7", "label": "" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesOut\"', 'Sum', 300)", "id": "e8", "label": "" } ]
+                ]
+              }
+            },
+            {
+              "type": "metric",
+              "x": 0, "y": 36, "width": 12, "height": 6,
+              "properties": {
+                "title": "Errors / recoveries by partner",
+                "region": "${AWS::Region}",
+                "period": 300,
+                "stat": "Sum",
+                "metrics": [
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"Errors\"', 'Sum', 300)", "id": "e9", "label": "" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerRecovered\"', 'Sum', 300)", "id": "e10", "label": "" } ]
+                ]
+              }
+            }
+          ]
+        }
