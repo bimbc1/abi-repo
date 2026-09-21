@@ -1,13 +1,6 @@
 ---
 AWSTemplateFormatVersion: "2010-09-09"
-Description: >-
-  Alarms and dashboard for the Manifest Metadata Lambda's CloudWatch
-  metrics. These metrics are published directly by the Lambda via
-  cloudwatch.put_metric_data() (see put_metric() in
-  manifest_metadata_lambda.py) -- this template does not create any
-  metrics itself, it only watches (Alarms) and displays (Dashboard) the
-  ones the Lambda is already publishing. Same pattern as the partner's
-  business-monitoring template.
+Description: 'Displaying the metrics metadata'
 
 Parameters:
   DashboardName:
@@ -16,12 +9,6 @@ Parameters:
     Description: 'Name of the CloudWatch dashboard to create.'
 
 Resources:
-
-  # ---------------------------------------------------------------------
-  # ALARMS -- these watch metrics that already exist in CloudWatch. They
-  # do not care whether the metric was published by a direct API call or
-  # a log-filter; they just read the namespace + metric name.
-  # ---------------------------------------------------------------------
 
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -93,11 +80,6 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
-  # ---------------------------------------------------------------------
-  # DASHBOARD -- displays the metrics above plus the rest of what the
-  # Lambda publishes, grouped the same way the code groups them
-  # (HIE/OperationalMonitoring vs HIE/PartnerMonitoring).
-  # ---------------------------------------------------------------------
 
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
