@@ -1,0 +1,125 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: SNS Topic for Partner Recovery Notifications
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues:
+      - dev
+      - stg
+      - prod
+   
+
+Mappings:
+  EnvConfig:
+    dev:
+      EmailAddress1: Abimbola.abiodun@va.gov
+      EmailAddress2: Richard.Olayinka@va.gov
+      EmailAddress3: Edward.Clark@va.gov
+      EmailAddress4: VAVHIECMDQTeam@va.gov
+    stg:
+      EmailAddress1: Abimbola.abiodun@va.gov
+      EmailAddress2: Richard.Olayinka@va.gov
+      EmailAddress3: Edward.Clark@va.gov
+      EmailAddress4: VAVHIECMDQTeam@va.gov
+    prod:
+      EmailAddress1: Abimbola.abiodun@va.gov
+      EmailAddress2: Richard.Olayinka@va.gov
+      EmailAddress3: Edward.Clark@va.gov
+      EmailAddress4: VAVHIECMDQTeam@va.gov
+
+Resources:
+  PartnerRecoverySNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Join ["-", ["project-hie-analytics-partner-recovery-alerts", !Ref Env] ]
+      DisplayName: !Sub "HIE Analytics Partner File Delivery Alerts ${Env}"
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+  PartnerRecoverySubscription1:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PartnerRecoverySNSTopic
+      Protocol: email
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress1]
+  PartnerRecoverySubscription2:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PartnerRecoverySNSTopic
+      Protocol: email
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress2]
+  PartnerRecoverySubscription3:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PartnerRecoverySNSTopic
+      Protocol: email
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress3]
+  PartnerRecoverySubscription4:
+    Type: AWS::SNS::Subscription
+    Properties:
+      TopicArn: !Ref PartnerRecoverySNSTopic
+      Protocol: email
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress4]
+
+  PartnerNotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Join ["-", ["project-hie-analytics-partner-monitoring-payload-alerts", !Ref Env] ]
+      DisplayName: !Sub "HIE Analytics Partner File Delivery Alerts ${Env}"
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref PartnerNotificationTopic
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress4]
+  EmailSubscription2:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref PartnerNotificationTopic
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress2]
+  EmailSubscription3:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref PartnerNotificationTopic
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress1]
+  EmailSubscription4:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Protocol: email
+      TopicArn: !Ref PartnerNotificationTopic
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress3]
+
+Outputs:
+  SNSTopicArn:
+    Description: SNS Topic ARN to use in Lambda
+    Value: !Ref PartnerRecoverySNSTopic
+    Export:
+      Name: !Sub project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
+
+  SNSPartnerTopicArn:
+    Description: ARN of the SNS Topic
+    Value: !Ref PartnerNotificationTopic
+    Export:
+      Name: !Sub project-hie-analytics-partner-file-delivery-sns-topic-arn-${Env}
+
+  SNSPartnerTopicName:
+    Description: Name of the SNS Topic
+    Value: !GetAtt PartnerNotificationTopic.TopicName
+    Export:
+      Name: !Sub project-hie-analytics-partner-file-delivery-sns-topic-name-${Env}
