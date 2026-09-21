@@ -91,7 +91,7 @@ def extract_batch_id(filename):
     for index, part in enumerate(parts):
         if part.lower() in markers:
             return "_".join(parts[:index])
-    return "_".join(parts[:2]) if len(parts) >= 2 else parts[0]
+    return parts[0]
     # --- FILE TYPE DETECTION ---
 def is_manifest_file(filename):
     return filename.lower().endswith("manifest.txt")
@@ -891,25 +891,11 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             dimensions=[{"Name": "PartnerName", "Value": partner_name or "Unknown"}]
         )
         logger.exception(
-            "Partner-state/breach-flag sync failed for bucket=%s batch_id=%s",
+            "Partner-state/breach-flag sync failed for bucket=%s batch_id=%s "
+            "(alert will be sent by lambda_handler)",
             bucket,
-            batch_id
+            batch_id,
         )
-        if not isinstance(e, DatabaseConnectionError):
-            _publish_operational_alert(
-                subject=f"CRITICAL: Manifest processing failed for batch {batch_id}",
-                message=(
-                    f"CRITICAL: Manifest processing failed for batch '{batch_id}'.\n"
-                    f"Failure category: General Processing Failure\n"
-                    f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
-                    f"AWS Region: {AWS_REGION}\n"
-                    f"Bucket: {bucket}\n"
-                    f"Partner: {partner_name or 'Unknown'}\n"
-                    f"Error type: {type(e).__name__}\n"
-                    f"Error message: {str(e)}\n"
-                ),
-                failure_category="General Processing Failure",
-            )
         raise
     finally:
         if conn:
@@ -1073,7 +1059,7 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
         metric_data = {
             "MetricName": metric_name,
             "Value": value,
-            "Unit"; unit,
+            "Unit": unit,
         }
         if dimensions:
             metric_data["Dimensions"] = dimensions
