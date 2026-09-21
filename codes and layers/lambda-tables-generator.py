@@ -117,7 +117,7 @@ def ensure_tables(cur):
             batch_id TEXT NOT NULL,
             environment VARCHAR(20) NOT NULL,
             file_name VARCHAR(255),
-            direction VARCHAR(20) NOT NULL,
+            direction VARCHAR(10) NOT NULL,
             edipi BIGINT NOT NULL,
             ssn VARCHAR(11),
             CONSTRAINT ssn_must_be_null CHECK (ssn IS NULL),
@@ -150,7 +150,10 @@ def ensure_tables(cur):
         # ---ADDING NEW COLUMNS TO PATIENT_DETAILS TABLE IF THEY DO NOT EXIST---
     cur.execute("""
         ALTER TABLE patient_details
-        ADD COLUMN IF NOT EXISTS direction VARCHAR(20);
+        ADD COLUMN IF NOT EXISTS direction VARCHAR(10);
+        UPDATE patient_details SET direction = 'inbound' WHERE direction IS NULL;
+        ALTER TABLE patient_details ALTER COLUMN direction TYPE VARCHAR(10);
+        ALTER TABLE patient_details ALTER COLUMN direction SET NOT NULL;
         ALTER TABLE patient_details
         ADD COLUMN IF NOT EXISTS file_name VARCHAR(255);
         ALTER TABLE patient_details
