@@ -90,6 +90,7 @@ def ensure_tables(cur):
         CREATE TABLE IF NOT EXISTS partner_registry (
             partner_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             partner_batch_key UUID NOT NULL DEFAULT gen_random_uuid(),
+            partner_name VARCHAR(100) NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             s3_bucket_arn VARCHAR(255) NOT NULL UNIQUE,
             environment VARCHAR(10) NOT NULL,
@@ -193,6 +194,7 @@ def ensure_tables(cur):
             actual_file_count INTEGER,
             count_discrepancy INTEGER,
             ingestion_method TEXT,
+            archived_date TIMESTAMPTZ DEFAULT NOW(),
             submission_timestamp TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT NOW(),
             updated_at TIMESTAMPTZ DEFAULT NOW(),
