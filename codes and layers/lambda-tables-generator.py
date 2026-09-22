@@ -216,6 +216,7 @@ def ensure_tables(cur):
             failure_type TEXT,
             last_alert_at TIMESTAMPTZ NOT NULL,
             expected_interval_seconds INTEGER NOT NULL,
+            grace_seconds INTEGER,
             breach_flag BOOLEAN DEFAULT FALSE,
             last_breach_email_sent_at TIMESTAMPTZ,
             last_recovery_email_sent_at TIMESTAMPTZ,
