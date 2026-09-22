@@ -50,8 +50,8 @@ ALERT_COOLDOWN_SECONDS = int(
 )
 _last_alert_times = {}
 
-DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400  
-MIN_SAMPLES_BEFORE_LEARNING = 5   
+DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400
+MIN_SAMPLES_BEFORE_LEARNING = 5
 
 sns = boto3.client("sns", region_name=AWS_REGION)
 
@@ -62,28 +62,12 @@ DB_HOST = os.environ["DB_HOST"]
 DB_PORT = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME = os.environ.get("DB_NAME", "ccda01")
 
-try:
-    INGESTION_METHOD_ARN_MARKERS = json.loads(os.environ.get("INGESTION_METHOD_ARN_MARKERS", "{}"))
-except (TypeError, ValueError):
-    logger.warning("INGESTION_METHOD_ARN_MARKERS is not valid JSON; ignoring it.")
-    INGESTION_METHOD_ARN_MARKERS = {}
-INGESTION_METHOD_DEFAULT = os.environ.get("INGESTION_METHOD_DEFAULT", "DIRECT_S3")
-
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 def invoke_retry_handler(error, event):
-    """Replaces the old send_to_dlq() call site. retry_utils is
-    imported at the top of this file from the Lambda Layer (same
-    pattern as psycopg2) -- no S3 download needed at runtime, since the
-    layer is already mounted at /opt by the time this code runs.
-
-    ASSUMPTION -- confirm this matches your actual layer's contents:
-    it's expected to expose a function `handle_retry(error, event)`.
-    Adjust the call below if your layer's function name differs.
-    """
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
@@ -137,10 +121,6 @@ def is_target_file(filename):
 
 
 def classify_batch_type(filename):
-    """Classify a target file (manifest/report/zip) as belonging to the
-    RECEIVED pair or the DISCLOSURE pair, based on the type marker still
-    present in its filename. Returns None if the filename is a target
-    file but doesn't carry a recognizable marker for its kind."""
     lower = filename.lower()
     if is_manifest_file(filename):
         if "inbound" in lower:
@@ -158,7 +138,6 @@ def classify_batch_type(filename):
 
 
 def list_batch_keys(bucket, batch_id):
-    """List all files in S3 with the given batch ID prefix."""
     keys = []
     token = None
     while True:
@@ -179,8 +158,6 @@ def list_batch_keys(bucket, batch_id):
 
 
 def find_available_keys(bucket, batch_id, batch_type):
-    """Find the manifest, report, and zip S3 keys for this batch that
-    belong to the given batch_type ("RECEIVED" or "DISCLOSURE") only."""
     keys = list_batch_keys(bucket, batch_id)
     manifest_key = None
     report_key = None
@@ -217,7 +194,6 @@ def find_available_keys(bucket, batch_id, batch_type):
 
 
 def get_object_metadata(bucket, key):
-    """Get metadata for an S3 object."""
     if not key:
         return None
     head = s3.head_object(Bucket=bucket, Key=key)
@@ -236,9 +212,6 @@ REPORT_SENT_TAG_KEY = "report-metadata-sent"
 
 
 def _get_object_tags(bucket, key):
-    """Read all tags on an S3 object as a dict. Fails safe toward an
-    empty dict (logging a warning) so callers treat an unreadable tag
-    set as "not sent yet" rather than raising."""
     try:
         tags = s3.get_object_tagging(Bucket=bucket, Key=key)
         return {t["Key"]: t["Value"] for t in tags.get("TagSet", [])}
@@ -248,19 +221,10 @@ def _get_object_tags(bucket, key):
 
 
 def is_message_already_sent(bucket, key, tag_key):
-    """Check a single per-message sent-status tag (manifest vs. report
-    are tracked independently under MANIFEST_SENT_TAG_KEY /
-    REPORT_SENT_TAG_KEY), so a retry after a partial failure only
-    re-sends whichever message didn't actually make it to SQS, instead
-    of re-sending both."""
     return _get_object_tags(bucket, key).get(tag_key) == PROCESSED_TAG_VALUE
 
 
 def mark_message_as_sent(bucket, key, tag_key):
-    """Tag the object with a single message's sent-status. Reads the
-    existing tag set first and merges in, since put_object_tagging
-    replaces the whole tag set and would otherwise clobber the other
-    message's tag."""
     try:
         tag_set = _get_object_tags(bucket, key)
         tag_set[tag_key] = PROCESSED_TAG_VALUE
@@ -274,11 +238,6 @@ def mark_message_as_sent(bucket, key, tag_key):
 
 
 def is_batch_already_sent(bucket, manifest_key):
-    """Check whether BOTH the manifest and report messages for this
-    batch have already been published to SQS. This is also the gate
-    that keeps the partner-state update / breach-flag clear (added
-    below) from firing more than once for the same batch on
-    retries/re-invocations."""
     tag_set = _get_object_tags(bucket, manifest_key)
     return (
         tag_set.get(MANIFEST_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
@@ -287,9 +246,10 @@ def is_batch_already_sent(bucket, manifest_key):
 
 
 class DatabaseConnectionError(RuntimeError):
+    """Raised when there is an error connecting to the database."""
 
 class SQSPublishError(RuntimeError):
-
+    """Raised when there is an error publishing to the SQS queue."""
 
 def _should_publish_alert(failure_category):
     now = datetime.now(timezone.utc)
@@ -350,7 +310,6 @@ def _publish_operational_alert(subject, message, failure_category):
         return False
 
 def notify_database_connection_failure(failure_category, error_message):
-    """Notify about a database connection failure."""
     request_id = (
         getattr(globals().get("context"), "aws_request_id", None)
         if globals().get("context")
@@ -375,7 +334,6 @@ def notify_database_connection_failure(failure_category, error_message):
     )
 
 def notify_sqs_publish_failure(error, context=None):
-    """Notify about an SQS publish failure without exposing message metadata."""
     request_id = (
         getattr(context, "aws_request_id", None)
         if context
@@ -400,7 +358,6 @@ def notify_sqs_publish_failure(error, context=None):
     )
 
 def route_critical_failure_notification(error, context=None):
-    """Route critical failure notifications based on the error type."""
     if isinstance(error, DatabaseConnectionError):
         return notify_database_connection_failure("Database Connection Failure", error)
     if isinstance(error, SQSPublishError):
@@ -414,7 +371,6 @@ def route_critical_failure_notification(error, context=None):
     return False
 
 def get_conn():
-	""" Establish a connection to the Aurora database using psycopg2. """
 	try:
 		secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
 		creds = json.loads(secret['SecretString'])
@@ -429,7 +385,7 @@ def get_conn():
 		)
 	except Exception as error:
 		logging.exception("Unable to connect to the database: %s", str(error))
-  
+
 		raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
   		) from error
@@ -438,7 +394,6 @@ def get_conn():
 # SQS MESSAGE HELPERS
 
 def publish_metadata_message(message_body, message_attributes=None):
-    """ Publish a message to the SQS queue. """
     try:
         if not METADATA_QUEUE_URL:
             raise ValueError("METADATA_QUEUE_URL is not configured.")
@@ -457,7 +412,6 @@ def publish_metadata_message(message_body, message_attributes=None):
         logging.exception("Unable to publish metadata message: %s", str(error))
 
         raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
-# =====================================================================
 
 def get_partner_info(cur, bucket_name):
     bucket_arn = f"arn:aws-us-gov:s3:::{bucket_name}"
@@ -593,10 +547,6 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
 
 
 def render_sns_template(template, partner_name, environment):
-    """Fill a subject/message template with partner_name and environment,
-    supporting both placeholder styles the CloudFormation template's env
-    vars use: $PARTNER_NAME / $ENVIRONMENT (SNS_SUBJECT_TEMPLATE) and
-    {partner_name} / {environment} (RESUMED_MESSAGE_TEMPLATE)."""
     rendered = template.replace("$PARTNER_NAME", str(partner_name)).replace(
         "$ENVIRONMENT", str(environment)
     )
@@ -608,11 +558,6 @@ def render_sns_template(template, partner_name, environment):
 
 
 def send_recovery_sns(partner_name, partner_id, environment):
-    """Send the recovery notification. Called only when clear_breach_flag()
-    reports an actual breach_flag TRUE -> FALSE transition (see its
-    docstring and sync_partner_state_and_breach_flag) -- never for a
-    brand-new partner_schedule row and never for an already-FALSE ->
-    FALSE on-time upload."""
     if not SNS_TOPIC_ARN:
         logger.warning("SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
         return
@@ -641,7 +586,6 @@ def send_recovery_sns(partner_name, partner_id, environment):
 
 # FILE VALIDATION AND COUNTING
 def read_manifest_expected_counts(bucket, key):
-    """Read the manifest file and extract expected counts."""
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
     counts = {}
@@ -659,10 +603,6 @@ def read_manifest_expected_counts(bucket, key):
 
 
 class _S3RangeReader:
-    """Minimal seekable, read-only file-like object that fetches only
-    the byte ranges zipfile actually needs from S3 via ranged
-    GetObject calls, so count_zip() never has to pull the whole
-    archive into Lambda memory."""
 
     def __init__(self, bucket, key, size):
         self._bucket = bucket
@@ -705,14 +645,12 @@ class _S3RangeReader:
 
 
 def count_zip(bucket, key):
-    """Count the number of files inside a ZIP archive."""
     size = s3.head_object(Bucket=bucket, Key=key)["ContentLength"]
     with zipfile.ZipFile(_S3RangeReader(bucket, key, size)) as z:
         return len([f for f in z.namelist() if not f.endswith("/")])
 
 
 def count_report_rows(bucket, key):
-    """Count the number of data rows in the report file."""
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
     lines = content.splitlines()
@@ -722,19 +660,6 @@ def count_report_rows(bucket, key):
 
 
 def extract_received_report_rows(bucket, key):
-    """Parse a PatientReceivedReport.txt file. Confirmed real header:
-
-        EDIPI|Patient_Last_Name|Patient_First_Name|SSN|Date_of_Receipt_(UTC)|
-        Sending_Organization|Purpose_of_Use|Purpose_of_Use_Code|User_Role|
-        Document_Format_Code|Document_LOINC_Code|Document_ID|Repository_ID|
-        Source_ID|CCDA_File_Name
-
-    -- 15 pipe-delimited fields. SSN (index 3) is intentionally parsed and
-    then dropped here: it is not included in the returned rows, so the real
-
-    SSN is never persisted downstream.
-
-    """
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
     lines = content.splitlines()
@@ -768,20 +693,6 @@ def extract_received_report_rows(bucket, key):
 
 
 def extract_disclosure_report_rows(bucket, key):
-    """Parse a PatientDisclosureReport.txt file. Confirmed real header:
-
-        EDIPI|Patient_Last_Name|Patient_First_Name|SSN|Date_of_Disclosure_(UTC)|
-        Receiving_Organization_ID|Receiving_Organization|Partner|User_ID|
-        User_Name|Role|Role_Code|Purpose_of_Use|Purpose_of_Use_Code|
-        Document_LOINC_Code|Document_ID|CCDA_File_Name|CommonWell_Indicator
-
-    -- 18 pipe-delimited fields. This is NOT just a shifted version of the
-    received-report layout -- past the shared EDIPI/name/SSN prefix, the
-    columns are completely different (no Sending_Organization, Repository_ID,
-    Source_ID, or Document_Format_Code; adds Receiving_Organization(_ID),
-    Partner, User_ID/Name, Role_Code, CommonWell_Indicator). SSN (index 3)
-    is intentionally parsed and dropped, same as extract_received_report_rows.
-    """
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
     lines = content.splitlines()
@@ -819,9 +730,7 @@ def extract_disclosure_report_rows(bucket, key):
 
 # SQS MESSAGE BUILDERS
 def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta, zip_meta,
-                                     manifest_expected_counts, partner_context, ingestion_method):
-    """Build the SQS message that carries manifest + CCDA zip
-    validation info. No patient-level data goes in this message."""
+                                     manifest_expected_counts, partner_context):
     zip_actual_count = count_zip(bucket, zip_meta["key"])
     zip_expected_count = manifest_expected_counts.get("CCDA", 0)
     zip_matches_manifest = zip_actual_count == zip_expected_count
@@ -850,7 +759,6 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "ingestion_method": ingestion_method,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -874,16 +782,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
 
 
 def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta,
-                                           manifest_expected_counts, partner_context, ingestion_method):
-    """Build the SQS message that carries the patient report validation
-    info and the patient-level rows.
-
-    The report's column layout depends on batch_type -- RECEIVED and
-    DISCLOSURE reports share only an EDIPI/name/SSN prefix and diverge
-    completely after that (see extract_received_report_rows /
-    extract_disclosure_report_rows), so the row shape in this message
-    differs depending on report_type below. The database consumer needs
-    to branch on report_type to know which set of keys to expect."""
+                                           manifest_expected_counts, partner_context):
     report_key = report_meta["key"]
     report_actual_count = count_report_rows(bucket, report_key)
     if batch_type == "RECEIVED":
@@ -916,7 +815,6 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "ingestion_method": ingestion_method,
         "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
@@ -1025,16 +923,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     }
 
 
-def build_metadata_messages(bucket, trigger_key, processing_start, ingestion_method):
-    """Build both metadata messages (manifest/zip validation and
-    patient report) for a batch. Returns None if the triggering file
-    isn't a recognized batch type, the batch isn't ready yet (missing
-    a same-type file), or the batch was already sent.
-
-    processing_start is passed straight through to
-    sync_partner_state_and_breach_flag() -- see its docstring.
-    ingestion_method is passed straight through to both SQS message
-    builders -- see detect_ingestion_method()."""
+def build_metadata_messages(bucket, trigger_key, processing_start):
     filename = os.path.basename(trigger_key)
     batch_id = extract_batch_id(filename)
 
@@ -1103,17 +992,16 @@ def build_metadata_messages(bucket, trigger_key, processing_start, ingestion_met
     )
 
     manifest_message = build_manifest_metadata_message(
-        bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context, ingestion_method
+        bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context
     )
     report_message = build_patient_report_metadata_message(
-        bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta, manifest_expected_counts, partner_context, ingestion_method
+        bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta, manifest_expected_counts, partner_context
     )
     return manifest_message, report_message, manifest_key
 
 
 # SQS SENDER
 def send_metadata_to_sqs(message):
-    """Send a metadata message to SQS."""
     message_body = json.dumps(message, default=str)
     send_args = {
         "QueueUrl": METADATA_QUEUE_URL,
@@ -1187,7 +1075,6 @@ def send_metadata_to_sqs(message):
 
 # CLOUDWATCH METRICS
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
-    """Send CloudWatch metric."""
     try:
         metric = {"MetricName": metric_name, "Value": value, "Unit": unit}
         if dimensions:
@@ -1202,7 +1089,6 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
 
 # MAIN OBJECT PROCESSOR
 def process_object(bucket, key, record):
-    """Process a single S3 object."""
     filename = os.path.basename(key)
     event_time = datetime.fromisoformat(
         record["eventTime"].replace("Z", "+00:00")
@@ -1227,10 +1113,7 @@ def process_object(bucket, key, record):
         logger.info("Skipping non-target file: %s", filename)
         return {"processed": False, "reason": "NON_TARGET_FILE"}
 
-    ingestion_method = detect_ingestion_method(record)
-    logger.info("Detected ingestion_method=%s for key=%s", ingestion_method, key)
-
-    result = build_metadata_messages(bucket, key, processing_start, ingestion_method)
+    result = build_metadata_messages(bucket, key, processing_start)
     if result is None:
         return {"processed": False, "reason": "BATCH_NOT_READY_OR_ALREADY_SENT"}
     manifest_message, report_message, manifest_key = result
@@ -1273,7 +1156,6 @@ def process_object(bucket, key, record):
 
 # LAMBDA ENTRY
 def lambda_handler(event, context):
-    """Main Lambda handler."""
     records = event.get("Records", [])
     if not records:
         logger.info("No records found in event.")
