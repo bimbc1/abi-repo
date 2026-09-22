@@ -38,7 +38,7 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
     # ---CREDENTIALS CACHING---
 _cached_creds = None
 _cached_creds_expiry = 0.0
-_CREDS_TTL_SECONDS = 900  
+_CREDS_TTL_SECONDS = 900
     # ---SETTING UP RETRY HANDLER FUNCTION---
 def invoke_retry_handler(error: Exception, event: dict) -> bool:
     try:
@@ -52,7 +52,7 @@ def get_db_credentials():
     global _cached_creds, _cached_creds_expiry
     now = time.time()
     if _cached_creds and now < _cached_creds_expiry:
-        return _cached_creds  
+        return _cached_creds
     secret_value = sm.get_secret_value(SecretId=DB_SECRET_ARN)
     creds = json.loads(secret_value["SecretString"])
     creds["host"] = DB_HOST
@@ -111,6 +111,16 @@ def lambda_handler(event, context):
         }
     try:
         with conn.cursor() as cur:
+            partners = [
+                {
+                    "s3_bucket_arn": PARTNER_1_BUCKET_ARN,
+                    "partner_name": "Oracle Health",
+                    "contact_person": "Abim",
+                    "contact_email": "abim@oracle.com",
+                    "contact_phone": "1234567890",
+                },
+            ]
+            partner_names_by_arn = {p["s3_bucket_arn"]: p["partner_name"] for p in partners}
             bucket_arns = [
                 PARTNER_1_BUCKET_ARN
             ]
@@ -133,30 +143,22 @@ def lambda_handler(event, context):
                     cur.execute("""
                         INSERT INTO partner_registry (
                             s3_bucket_arn,
-                            environment
+                            environment,
+                            partner_name
                         )
-                        VALUES (%s, %s)
+                        VALUES (%s, %s, %s)
                         RETURNING partner_id, partner_batch_key;
-                    """, (arn, environment))
+                    """, (arn, environment, partner_names_by_arn.get(arn)))
                     pid, pbatch = cur.fetchone()
                     logger.info(
                         f"Created partner_registry → {arn}: {pid}, {pbatch}"
                     )
-            partners = [
-                {
-                    "s3_bucket_arn": PARTNER_1_BUCKET_ARN,
-                    "partner_name": "Oracle Health",
-                    "contact_person": "Abim",
-                    "contact_email": "abim@oracle.com",
-                    "contact_phone": "1234567890",
-                },
-            ]
             inserted = 0
             skipped = 0
             for p in partners:
                     # ---GETTING DATA FROM PARTNER REGISTRY BASED ON S3 BUCKET ARN---
                 cur.execute("""
-                    SELECT partner_id, partner_batch_key, environment
+                    SELECT partner_id, partner_batch_key, environment, partner_name
                     FROM partner_registry
                     WHERE s3_bucket_arn = %s
                     ORDER BY created_at DESC
@@ -167,17 +169,16 @@ def lambda_handler(event, context):
                     logger.warning(f"Skipping (ARN not found): {p['s3_bucket_arn']}")
                     skipped += 1
                     continue
-                partner_id, partner_batch_key, environment = row
+                partner_id, partner_batch_key, environment, partner_name = row
                 cur.execute("""
                     SELECT 1
                     FROM partner_contact_details
                     WHERE partner_id = %s
                     AND partner_batch_key = %s
-                    AND partner_name = %s
                     LIMIT 1;
-                """, (partner_id, partner_batch_key, p["partner_name"]))
+                """, (partner_id, partner_batch_key))
                 if cur.fetchone():
-                    logger.info(f"Skipping duplicate partner: {p['partner_name']}")
+                    logger.info(f"Skipping duplicate partner: {partner_name}")
                     skipped += 1
                 else:
                         # ---INSERTING NEW PARTNER CONTACT DETAILS RECORD---
@@ -194,7 +195,7 @@ def lambda_handler(event, context):
                     """, (
                         partner_id,
                         partner_batch_key,
-                        p["partner_name"],
+                        partner_name,
                         p["contact_person"],
                         p["contact_email"],
                         p["contact_phone"]
