@@ -216,8 +216,10 @@ def is_batch_already_sent(bucket, manifest_key):
     # --- CUSTOM EXCEPTIONS ---
 class DatabaseConnectionError(RuntimeError):
     """Raised when there is an error connecting to the database."""
+pass
 class SQSPublishError(RuntimeError):
     """Raised when there is an error publishing to the SQS queue."""
+pass
     # --- OPERATIONAL ALERT COOLDOWN AND SNS ALERTING ---
 def _should_publish_alert(failure_category):
     """Determine whether an alert may be published for the category."""
