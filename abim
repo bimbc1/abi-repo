@@ -246,10 +246,12 @@ def is_batch_already_sent(bucket, manifest_key):
 
 
 class DatabaseConnectionError(RuntimeError):
-    """Raised when there is an error connecting to the database."""
+"""Raised when the manifest lambda cannot open a DB connection."""
+pass
 
 class SQSPublishError(RuntimeError):
-    """Raised when there is an error publishing to the SQS queue."""
+"""Raised when publishing a metadata message to SQS fails."""
+pass
 
 def _should_publish_alert(failure_category):
     now = datetime.now(timezone.utc)
