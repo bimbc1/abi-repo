@@ -37,14 +37,15 @@ ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
 _last_alert_times = {}
-DEFAULT_EXPECTED_INTERVAL_SECONDS   = 86400  
-MIN_SAMPLES_BEFORE_LEARNING         = 5            
+DEFAULT_EXPECTED_INTERVAL_SECONDS   = 86400
+MIN_SAMPLES_BEFORE_LEARNING         = 5
 sns = boto3.client("sns", region_name=AWS_REGION)
 METADATA_QUEUE_URL  = os.environ["METADATA_QUEUE_URL"]
 DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
 DB_HOST             = os.environ["DB_HOST"]
 DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME             = os.environ.get("DB_NAME")
+INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
     # --AWS CLIENTS---
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
@@ -91,7 +92,7 @@ def extract_batch_id(filename):
     for index, part in enumerate(parts):
         if part.lower() in markers:
             return "_".join(parts[:index])
-    return parts[0]
+    return "_".join(parts[:2]) if len(parts) >= 2 else parts[0]
     # --- FILE TYPE DETECTION ---
 def is_manifest_file(filename):
     return filename.lower().endswith("manifest.txt")
@@ -134,10 +135,7 @@ def list_batch_keys(bucket, batch_id):
             token = resp.get("NextContinuationToken")
         else:
             break
-    return [
-        k for k in keys
-        if extract_batch_id(os.path.basename(k)) == batch_id
-    ]
+    return keys
     # --- BATCH FILE PAIR SELECTION ---
 def find_available_keys(bucket, batch_id, batch_type):
     keys = list_batch_keys(bucket, batch_id)
@@ -765,6 +763,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
+        "ingestion_method": INGESTION_METHOD,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -818,6 +817,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
+        "ingestion_method": INGESTION_METHOD,
         "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
@@ -894,11 +894,25 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             dimensions=[{"Name": "PartnerName", "Value": partner_name or "Unknown"}]
         )
         logger.exception(
-            "Partner-state/breach-flag sync failed for bucket=%s batch_id=%s "
-            "(alert will be sent by lambda_handler)",
+            "Partner-state/breach-flag sync failed for bucket=%s batch_id=%s",
             bucket,
-            batch_id,
+            batch_id
         )
+        if not isinstance(e, DatabaseConnectionError):
+            _publish_operational_alert(
+                subject=f"CRITICAL: Manifest processing failed for batch {batch_id}",
+                message=(
+                    f"CRITICAL: Manifest processing failed for batch '{batch_id}'.\n"
+                    f"Failure category: General Processing Failure\n"
+                    f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+                    f"AWS Region: {AWS_REGION}\n"
+                    f"Bucket: {bucket}\n"
+                    f"Partner: {partner_name or 'Unknown'}\n"
+                    f"Error type: {type(e).__name__}\n"
+                    f"Error message: {str(e)}\n"
+                ),
+                failure_category="General Processing Failure",
+            )
         raise
     finally:
         if conn:
@@ -1070,18 +1084,8 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
             Namespace=namespace,
             MetricData=[metric_data]
         )
-        logger.info(
-            "Published CloudWatch metric: namespace=%s metric=%s value=%s",
-            namespace,
-            metric_name,
-            value
-        )
     except Exception as e:
-        logger.warning(
-            "Failed to publish CloudWatch metric %s: %s", 
-            metric_name, 
-            e
-        )
+        logger.warning("Failed to publish metric %s: %s", metric_name, e)
     # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
