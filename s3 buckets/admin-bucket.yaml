@@ -4,7 +4,10 @@ Description: S3 bucket for the admin partner registry exports
 Parameters:
   Env:
     Type: String
-    AllowedValues: [dev, stg, prod]
+    AllowedValues:
+      - dev
+      - stg
+      - prod
 
 Resources:
 
@@ -17,8 +20,6 @@ Resources:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
               SSEAlgorithm: AES256
-      VersioningConfiguration:
-        Status: Enabled
       PublicAccessBlockConfiguration:
         BlockPublicAcls: true
         BlockPublicPolicy: true
@@ -26,17 +27,15 @@ Resources:
         RestrictPublicBuckets: true
       Tags:
         - Key: tenant:CKID
-          Value: "2598"
+          Value: '2598'
         - Key: tenant:VAECID
-          Value: "AWG20251201001"
+          Value: AWG20251201001
         - Key: va_vasi_id
-          Value: "2238"
+          Value: '2238'
         - Key: Name
           Value: !Sub project-hi-analytics-admin-registry-bucket-${Env}
         - Key: Purpose
           Value: admin-registry
-
-
 
 Outputs:
 
