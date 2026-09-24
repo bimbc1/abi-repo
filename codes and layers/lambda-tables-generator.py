@@ -97,6 +97,11 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+    # ---adding the partner_name---
+    cur.execute("""
+        ALTER TABLE partner_registry
+        ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100) NOT NULL;
+    """)
         # ---CREATING PARTNER_CONTACT_DETAILS TABLE---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS partner_contact_details (
