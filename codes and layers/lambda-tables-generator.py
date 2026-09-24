@@ -236,7 +236,6 @@ def ensure_tables(cur):
             schedule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             partner_id UUID NOT NULL,
             failure_type TEXT,
-            last_alert_at TIMESTAMPTZ NOT NULL,
             expected_interval_seconds INTEGER NOT NULL,
             grace_seconds INTEGER,
             breach_flag BOOLEAN DEFAULT FALSE,
@@ -250,6 +249,10 @@ def ensure_tables(cur):
     cur.execute("""
         ALTER TABLE partner_schedule
         DROP COLUMN IF EXISTS timezone;
+    """)
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMPTZ NOT NULL;
     """)
     # ---CREATING PARTNER_TRANSMISSION_STATE TABLE---
     cur.execute("""
