@@ -19,7 +19,7 @@ except ImportError as e:
             )
             return False
     retry_utils = _RetryUtilsFallback()
-    # ---SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---  
+    # ---SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
     # ---ENVIRONMENT VARIABLES---
@@ -55,7 +55,7 @@ def get_db_credentials():
     creds.setdefault("sslmode", "require")
     _cached_creds = creds
     return creds
-    # ---GETTING DATABASE CONNECTION--- 
+    # ---GETTING DATABASE CONNECTION---
 def get_conn():
     try:
         creds = get_db_credentials()
@@ -201,10 +201,28 @@ def ensure_tables(cur):
             CONSTRAINT unique_batch UNIQUE (file_name)
         );
     """)
+    # ---RENAME LEGACY COLUMN batch_name -> file_name IF PRESENT---
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'manifest_batch'
+                  AND column_name = 'batch_name'
+            ) THEN
+                ALTER TABLE manifest_batch
+                RENAME COLUMN batch_name TO file_name;
+            END IF;
+        END
+        $$;
+    """)
         # ---ENSURING THE UNIQUE CONSTRAINT ON FILE_NAME IS PRESENT---
     cur.execute("""
         ALTER TABLE manifest_batch
         DROP CONSTRAINT IF EXISTS unique_batch;
+    """)
+    cur.execute("""
         ALTER TABLE manifest_batch
         ADD CONSTRAINT unique_batch UNIQUE (file_name);
     """)
@@ -240,14 +258,12 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
-        # ---SENDING SUCCESS LOG AFTER TABLE CREATION/UPDATE---
     logger.info("Tables created/updated successfully.")
 
     # ---LAMBDA HANDLER---
 def lambda_handler(event, context):
     logger.info("Running lambda_tables_generator")
     conn = None
-        # ---TRYING TO ESTABLISH DATABASE CONNECTION---
     try:
         conn = get_conn()
     except Exception as e:
@@ -258,23 +274,19 @@ def lambda_handler(event, context):
             "statusCode": 202,
             "body": json.dumps("Database connection failed; retry handler invoked.")
         }
-        # ---TRYING TO CREATE/UPDATE TABLES---
     try:
         with conn.cursor() as cur:
             ensure_tables(cur)
         conn.commit()
-        # ---IF TABLE CREATION/UPDATE FAILS, ROLLBACK AND LOG EXCEPTION---
     except Exception:
         conn.rollback()
         global _cached_creds
         _cached_creds = None
         logger.exception("Failed creating tables")
         raise
-        # ---SENDING SUCCESS LOG AFTER TABLE CREATION/UPDATE---
     finally:
         if conn:
             conn.close()
-        # ---RETURNING SUCCESS RESPONSE---
     return {
         "statusCode": 200,
         "body": json.dumps("Tables created successfully.")
