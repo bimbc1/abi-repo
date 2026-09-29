@@ -90,7 +90,7 @@ Resources:
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
-      DashboardName: !Sub 'project-hie-operational-monitoring-${Env}'
+      DashboardName: !Sub 'project-hie-analytics-operational-dashboard-${Env}'
       DashboardBody: !Sub |
         {
           "widgets": [
