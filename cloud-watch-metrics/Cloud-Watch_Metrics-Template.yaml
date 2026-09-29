@@ -1,7 +1,10 @@
----
-AWSTemplateFormatVersion: "2010-09-09"
-Description: >-
-  Alarms and dashboard for the Manifest Metadata Lambda's CloudWatch metrics. 
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Alarms and dashboard for the Manifest Metadata Lambda's CloudWatch
+  metrics. These metrics are published directly by the Lambda via
+  cloudwatch.put_metric_data() (see put_metric() in manifest_metadata_lambda.py)
+  -- this template does not create any metrics itself, it only watches (Alarms)
+  and displays (Dashboard) the ones the Lambda is already publishing. Same
+  pattern as the partner's business-monitoring template.
 
 Parameters:
   Env:
@@ -13,13 +16,17 @@ Parameters:
 
 Resources:
 
-  # --- ALARMS, these watch metrics that already exist in CloudWatch. --- 
+  # ---------------------------------------------------------------------
+  # ALARMS -- these watch metrics that already exist in CloudWatch. They
+  # do not care whether the metric was published by a direct API call or
+  # a log-filter; they just read the namespace + metric name.
+  # ---------------------------------------------------------------------
 
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ManifestMetadata-DatabaseConnectionFailures
-      AlarmDescription: 'Fires when the Manifest Metadata Lambda fails to connect to the database.'
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails to connect to the database.
       Namespace: HIE/OperationalMonitoring
       MetricName: DatabaseConnectionFailures
       Statistic: Sum
@@ -33,7 +40,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ManifestMetadata-LambdaFailures
-      AlarmDescription: 'Fires when the Manifest Metadata Lambda fails while processing a record.'
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails while processing a record.
       Namespace: HIE/OperationalMonitoring
       MetricName: MetadataLambdaFailures
       Statistic: Sum
@@ -47,7 +54,8 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ManifestMetadata-ServiceAvailability
-      AlarmDescription: 'Fires when the Lambda reports itself unavailable (retry handler also failed), or when it has not reported availability at all.'
+      AlarmDescription: Fires when the Lambda reports itself unavailable (retry
+        handler also failed), or when it has not reported availability at all.
       Namespace: HIE/OperationalMonitoring
       MetricName: ServiceAvailability
       Statistic: Minimum
@@ -61,7 +69,7 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ManifestMetadata-CountMismatchEvents
-      AlarmDescription: 'Fires when a batch''s actual file/row count does not match its manifest.'
+      AlarmDescription: Fires when a batch's actual file/row count does not match its manifest.
       Namespace: HIE/OperationalMonitoring
       MetricName: CountMismatchEvents
       Statistic: Sum
@@ -75,7 +83,8 @@ Resources:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ManifestMetadata-RetryHandlerFailures
-      AlarmDescription: 'Fires when the retry_utils handler itself fails to run -- no retry is guaranteed for the underlying error.'
+      AlarmDescription: Fires when the retry_utils handler itself fails to run -- no
+        retry is guaranteed for the underlying error.
       Namespace: HIE/OperationalMonitoring
       MetricName: RetryHandlerInvocationFailures
       Statistic: Sum
@@ -85,12 +94,16 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
-  # --- DASHBOARD displays the metrics in widgets. ---
+  # ---------------------------------------------------------------------
+  # DASHBOARD -- displays the metrics above plus the rest of what the
+  # Lambda publishes, grouped the same way the code groups them
+  # (HIE/OperationalMonitoring vs HIE/PartnerMonitoring).
+  # ---------------------------------------------------------------------
 
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
-      DashboardName: !Sub 'project-hie-analytics-operational-dashboard-${Env}'
+      DashboardName: !Sub project-hie-analytics-operational-dashboard-${Env}
       DashboardBody: !Sub |
         {
           "widgets": [
@@ -104,8 +117,8 @@ Resources:
                 "period": 300,
                 "stat": "Sum",
                 "metrics": [
-                  ["HIE/PartnerMonitoring", "FilesIn"],
-                  ["HIE/PartnerMonitoring", "BytesIn"]
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)", "id": "e1", "label": "FilesIn" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BytesIn\"', 'Sum', 300)", "id": "e2", "label": "BytesIn" } ]
                 ]
               }
             },
@@ -119,8 +132,7 @@ Resources:
                 "period": 300,
                 "stat": "Sum",
                 "metrics": [
-                  ["HIE/PartnerMonitoring", "ActiveIncidents", "PartnerName", "Epic_Health", { "label": "Epic_Health ActiveIncidents" } ],
-                  ["HIE/PartnerMonitoring", "ActiveIncidents", "PartnerName", "Oracle_Health", { "label": "Oracle_Health ActiveIncidents" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)", "id": "e1", "label": "ActiveIncidents" } ],
                   ["HIE/OperationalMonitoring", "S3ObjectArrivals", { "label": "S3ObjectArrivals" } ],
                   ["HIE/OperationalMonitoring", "ProcessingDelaySeconds", { "label": "ProcessingDelays" } ]
                 ]
@@ -149,7 +161,7 @@ Resources:
                 "view": "gauge",
                 "period": 300,
                 "stat": "Sum",
-                "yAxis": { "left": { "min": 0, "max": 20 } },
+                "yAxis": { "left": { "min": 0, "max": 5 } },
                 "metrics": [
                   ["HIE/OperationalMonitoring", "DatabaseConnectionFailures"]
                 ],
@@ -157,7 +169,7 @@ Resources:
                   "horizontal": [
                     {
                       "label": "database connection failure",
-                      "value": 10,
+                      "value": 3,
                       "fill": "above",
                       "color": "#d13212"
                     }
@@ -176,10 +188,7 @@ Resources:
                 "stat": "Sum",
                 "yAxis": { "left": { "min": 0, "max": 20 } },
                 "metrics": [
-                  ["HIE/PartnerMonitoring", "StaleConnection", "PartnerId", "Epic_Health", { "label": "Epic_Health StaleConnections" } ],
-                  ["HIE/PartnerMonitoring", "MissingTransmissions", "PartnerName", "Epic_Health", { "label": "Epic_Health MissingTransmissions" } ],
-                  ["HIE/PartnerMonitoring", "MissingTransmissions", "PartnerName", "Oracle_Health", { "label": "Oracle_Health MissingTransmissions" } ],
-                  ["HIE/PartnerMonitoring", "StaleConnection", "PartnerId", "Oracle_Health", { "label": "Oracle_Health StaleConnections" } ]
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum', 300)", "id": "e1", "label": "StaleConnection" } ]
                 ]
               }
             },
@@ -208,8 +217,7 @@ Resources:
                 "stat": "Sum",
                 "yAxis": { "left": { "min": 0, "max": 20 } },
                 "metrics": [
-                  ["HIE/PartnerMonitoring", "ActiveIncidents", "PartnerName", "Oracle_Health", { "label": "Oracle_Health" } ],
-                  ["HIE/PartnerMonitoring", "ActiveIncidents", "PartnerName", "Epic_Health", { "label": "Epic_Health" } ]
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)", "id": "e1", "label": "ActiveIncidents" } ]
                 ]
               }
             },
@@ -224,10 +232,8 @@ Resources:
                 "stat": "Sum",
                 "yAxis": { "left": { "min": 0, "max": 20 } },
                 "metrics": [
-                  ["HIE/PartnerMonitoring", "BreachEvents", "PartnerName", "Oracle_Health", { "label": "Oracle_Health BreachEvents" } ],
-                  ["HIE/PartnerMonitoring", "PartnerInBreach", "PartnerName", "Epic_Health", { "label": "Epic_Health PartnerInBreach" } ],
-                  ["HIE/PartnerMonitoring", "BreachEvents", "PartnerName", "Epic_Health", { "label": "Epic_Health BreachEvents" } ],
-                  ["HIE/PartnerMonitoring", "PartnerInBreach", "PartnerName", "Oracle_Health", { "label": "Oracle_Health PartnerInBreach" } ]
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum', 300)", "id": "e1", "label": "BreachEvents" } ],
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerInBreach\"', 'Sum', 300)", "id": "e2", "label": "PartnerInBreach" } ]
                 ]
               }
             },
@@ -240,17 +246,23 @@ Resources:
                 "view": "gauge",
                 "period": 300,
                 "stat": "Sum",
-                "yAxis": { "left": { "min": 0, "max": 20 } },
+                "yAxis": { "left": { "min": 0, "max": 288 } },
                 "metrics": [
-                  ["HIE/PartnerMonitoring", "FilesIn"]
+                  [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)", "id": "e1", "label": "FilesIn" } ]
                 ],
                 "annotations": {
                   "horizontal": [
                     {
                       "label": "below files",
-                      "value": 9,
+                      "value": 287,
                       "fill": "below",
                       "color": "#d13212"
+                    },
+                    {
+                      "label": "above files",
+                      "value": 288,
+                      "fill": "above",
+                      "color": "#2ca02c"
                     }
                   ]
                 }
