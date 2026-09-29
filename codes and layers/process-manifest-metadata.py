@@ -259,6 +259,11 @@ def _publish_operational_alert(subject, message, failure_category):
                 }
             },
         )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSNotificationsSent",
+            value=1
+        )
         _record_alert_time(failure_category)
         logger.info(
             "Published alert to SNS topic '%s' for category '%s'.",
