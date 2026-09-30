@@ -1,10 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: Alarms and dashboard for the Manifest Metadata Lambda's CloudWatch
-  metrics. These metrics are published directly by the Lambda via
-  cloudwatch.put_metric_data() (see put_metric() in manifest_metadata_lambda.py)
-  -- this template does not create any metrics itself, it only watches (Alarms)
-  and displays (Dashboard) the ones the Lambda is already publishing. Same
-  pattern as the partner's business-monitoring template.
+Description: HIE Analytics Operational Monitoring CloudWatch Dashboard and Alarms
 
 Parameters:
   Env:
