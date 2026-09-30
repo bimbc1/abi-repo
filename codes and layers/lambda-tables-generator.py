@@ -90,16 +90,12 @@ def ensure_tables(cur):
         CREATE TABLE IF NOT EXISTS partner_registry (
             partner_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             partner_batch_key UUID NOT NULL DEFAULT gen_random_uuid(),
+            partner_name VARCHAR(100) NOT NULL,
             created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
             s3_bucket_arn VARCHAR(255) NOT NULL UNIQUE,
             environment VARCHAR(10) NOT NULL,
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
-    """)
-    # ---adding the partner_name---
-    cur.execute("""
-        ALTER TABLE partner_registry
-        ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100) NOT NULL;
     """)
         # ---CREATING PARTNER_CONTACT_DETAILS TABLE---
     cur.execute("""
@@ -169,6 +165,8 @@ def ensure_tables(cur):
         ADD COLUMN IF NOT EXISTS receiving_organization_id VARCHAR(64);
         ALTER TABLE patient_details
         ADD COLUMN IF NOT EXISTS commonwell_indicator BOOLEAN;
+        ALTER TABLE partner_schedule
+        ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
     """)
         # ---ENSURING THE CHECK CONSTRAINT ON SSN IS PRESENT---
     cur.execute("""
@@ -236,6 +234,7 @@ def ensure_tables(cur):
             schedule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             partner_id UUID NOT NULL,
             failure_type TEXT,
+            last_alert_at TIMESTAMPTZ NOT NULL,
             expected_interval_seconds INTEGER NOT NULL,
             grace_seconds INTEGER,
             breach_flag BOOLEAN DEFAULT FALSE,
@@ -249,10 +248,6 @@ def ensure_tables(cur):
     cur.execute("""
         ALTER TABLE partner_schedule
         DROP COLUMN IF EXISTS timezone;
-    """)
-    cur.execute("""
-        ALTER TABLE partner_schedule
-        ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMPTZ NOT NULL;
     """)
     # ---CREATING PARTNER_TRANSMISSION_STATE TABLE---
     cur.execute("""
