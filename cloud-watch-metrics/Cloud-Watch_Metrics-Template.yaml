@@ -116,7 +116,7 @@ Resources:
                 "x": 0,
                 "y": 0,
                 "width": 24,
-                "height": 2,
+                "height": 1,
                 "properties": {
                   "markdown": "# Project HIE Analytics Operational Monitoring - ${Env}"
                 }
@@ -124,16 +124,29 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 2,
+                "y": 1,
                 "width": 24,
-                "height": 2,
+                "height": 1,
                 "properties": {
                   "markdown": "## Operational Monitoring Status"
                 }
               },
               {
+                "type": "text",
+                "x": 0,
+                "y": 2,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## AWS Transfer Family"
+                }
+              },
+              {
                 "type": "metric",
-                "x": 0, "y": 4, "width": 8, "height": 6,
+                "x": 0,
+                "y": 3,
+                "width": 8,
+                "height": 6,
                 "properties": {
                   "title": "Transfer family",
                   "region": "${AWS::Region}",
@@ -141,126 +154,42 @@ Resources:
                   "period": 300,
                   "stat": "Sum",
                   "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)", "id": "e1", "label": "FilesIn" } ]
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "FilesIn"
+                      }
+                    ]
                   ]
                 }
               },
               {
                 "type": "metric",
-                "x": 8, "y": 4, "width": 8, "height": 6,
-                "properties": {
-                  "title": "Storage & Processing",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)", "id": "e1", "label": "ActiveIncidents" } ],
-                    ["HIE/OperationalMonitoring", "S3ObjectArrivals", { "label": "S3ObjectArrivals" } ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8, "y": 4, "width": 8, "height": 6,
-                "properties": {
-                  "title": "Processing Delays",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)", "id": "e1", "label": "ActiveIncidents" } ],
-                    ["HIE/OperationalMonitoring", "ProcessingDelaySeconds", { "label": "ProcessingDelays" } ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 16, "y": 4, "width": 8, "height": 6,
-                "properties": {
-                  "title": "Authentication",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    ["HIE/OperationalMonitoring", "DatabaseConnectionFailures"]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0, "y": 14, "width": 24, "height": 8,
-                "properties": {
-                  "title": "Partner connectivity",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "period": 300,
-                  "stat": "Sum",
-                  "yAxis": { "left": { "min": 0, "max": 20 } },
-                  "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum', 300)", "id": "e1", "label": "StaleConnection" } ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0, "y": 22, "width": 8, "height": 6,
-                "properties": {
-                  "title": "SNSNotificationsSent",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    ["HIE/OperationalMonitoring", "SNSNotificationsSent"]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8, "y": 22, "width": 16, "height": 6,
-                "properties": {
-                  "title": "ActiveIncidents",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "period": 300,
-                  "stat": "Sum",
-                  "yAxis": { "left": { "min": 0, "max": 20 } },
-                  "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)", "id": "e1", "label": "ActiveIncidents" } ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0, "y": 28, "width": 24, "height": 8,
-                "properties": {
-                  "title": "BreachEvents, PartnerInBreach",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "period": 300,
-                  "stat": "Sum",
-                  "yAxis": { "left": { "min": 0, "max": 20 } },
-                  "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum', 300)", "id": "e1", "label": "BreachEvents" } ],
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerInBreach\"', 'Sum', 300)", "id": "e2", "label": "PartnerInBreach" } ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0, "y": 36, "width": 6, "height": 6,
+                "x": 8,
+                "y": 3,
+                "width": 6,
+                "height": 6,
                 "properties": {
                   "title": "FilesIn",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "period": 300,
                   "stat": "Sum",
-                  "yAxis": { "left": { "min": 0, "max": 288 } },
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 288
+                    }
+                  },
                   "metrics": [
-                    [ { "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)", "id": "e1", "label": "FilesIn" } ]
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "FilesIn"
+                      }
+                    ]
                   ],
                   "annotations": {
                     "horizontal": [
@@ -281,8 +210,51 @@ Resources:
                 }
               },
               {
+                "type": "text",
+                "x": 0,
+                "y": 9,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Authentication"
+                }
+              },
+              {
                 "type": "metric",
-                "x": 6, "y": 36, "width": 6, "height": 6,
+                "x": 0,
+                "y": 10,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Authentication",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "DatabaseConnectionFailures"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 16,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Workflow Health"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 17,
+                "width": 6,
+                "height": 6,
                 "properties": {
                   "title": "RetryHandlerInvocationFailures",
                   "region": "${AWS::Region}",
@@ -290,13 +262,19 @@ Resources:
                   "period": 300,
                   "stat": "Sum",
                   "metrics": [
-                    ["HIE/OperationalMonitoring", "RetryHandlerInvocationFailures"]
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryHandlerInvocationFailures"
+                    ]
                   ]
                 }
               },
               {
                 "type": "metric",
-                "x": 12, "y": 36, "width": 6, "height": 6,
+                "x": 6,
+                "y": 17,
+                "width": 6,
+                "height": 6,
                 "properties": {
                   "title": "DatabaseConnectionRetries",
                   "region": "${AWS::Region}",
@@ -304,28 +282,17 @@ Resources:
                   "period": 300,
                   "stat": "Sum",
                   "metrics": [
-                    ["HIE/OperationalMonitoring", "DatabaseConnectionRetries"]
+                    [
+                      "HIE/OperationalMonitoring",
+                      "DatabaseConnectionRetries"
+                    ]
                   ]
                 }
               },
               {
                 "type": "metric",
-                "x": 18, "y": 36, "width": 6, "height": 6,
-                "properties": {
-                  "title": "ProcessingDelaySeconds",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Average",
-                  "metrics": [
-                    ["HIE/OperationalMonitoring", "ProcessingDelaySeconds"]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 48,
+                "x": 12,
+                "y": 17,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -345,29 +312,21 @@ Resources:
                 }
               },
               {
-                "type": "metric",
-                "x": 0, "y": 42, "width": 6, "height": 6,
-                "properties": {
-                  "title": "CRUDFailures",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    ["HIE/OperationalMonitoring", "CRUDFailures"]
-                  ]
-                }
-              },
-              {
                 "type": "text",
-                "x": 0, "y": 54, "width": 24, "height": 2,
+                "x": 0,
+                "y": 23,
+                "width": 24,
+                "height": 1,
                 "properties": {
                   "markdown": "## Lambda Health"
                 }
               },
               {
                 "type": "metric",
-                "x": 0, "y": 56, "width": 8, "height": 6,
+                "x": 0,
+                "y": 24,
+                "width": 8,
+                "height": 6,
                 "properties": {
                   "title": "Lambda Invocations",
                   "region": "${AWS::Region}",
@@ -375,13 +334,24 @@ Resources:
                   "period": 300,
                   "stat": "Sum",
                   "metrics": [
-                    ["AWS/Lambda", "Invocations", "FunctionName", "${LambdaFunctionName}", { "label": "Invocations" } ]
+                    [
+                      "AWS/Lambda",
+                      "Invocations",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      {
+                        "label": "Invocations"
+                      }
+                    ]
                   ]
                 }
               },
               {
                 "type": "metric",
-                "x": 8, "y": 56, "width": 8, "height": 6,
+                "x": 8,
+                "y": 24,
+                "width": 8,
+                "height": 6,
                 "properties": {
                   "title": "Lambda Errors",
                   "region": "${AWS::Region}",
@@ -389,13 +359,25 @@ Resources:
                   "period": 300,
                   "stat": "Sum",
                   "metrics": [
-                    ["AWS/Lambda", "Errors", "FunctionName", "${LambdaFunctionName}", { "label": "Errors", "color": "#d13212" } ]
+                    [
+                      "AWS/Lambda",
+                      "Errors",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      {
+                        "label": "Errors",
+                        "color": "#d13212"
+                      }
+                    ]
                   ]
                 }
               },
               {
                 "type": "metric",
-                "x": 16, "y": 56, "width": 8, "height": 6,
+                "x": 16,
+                "y": 24,
+                "width": 8,
+                "height": 6,
                 "properties": {
                   "title": "Lambda Throttles",
                   "region": "${AWS::Region}",
@@ -403,7 +385,347 @@ Resources:
                   "period": 300,
                   "stat": "Sum",
                   "metrics": [
-                    ["AWS/Lambda", "Throttles", "FunctionName", "${LambdaFunctionName}", { "label": "Throttles", "color": "#ff7f0e" } ]
+                    [
+                      "AWS/Lambda",
+                      "Throttles",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      {
+                        "label": "Throttles",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 30,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "CCDA Extraction Lambda Invocations",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "AWS/Lambda",
+                      "Invocations",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      {
+                        "label": "Invocations"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 30,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "CCDA Extraction Lambda Errors",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "AWS/Lambda",
+                      "Errors",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      {
+                        "label": "Errors",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 30,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "CCDA Extraction Lambda Throttles",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "AWS/Lambda",
+                      "Throttles",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      {
+                        "label": "Throttles",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 36,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Storage & Processing"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 37,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Storage & Processing",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "ActiveIncidents"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "S3ObjectArrivals",
+                      {
+                        "label": "S3ObjectArrivals"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 37,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Processing Delays",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "ActiveIncidents"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds",
+                      {
+                        "label": "ProcessingDelays"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 37,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "ProcessingDelaySeconds",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Average",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 43,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Database Health"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 44,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "CRUDFailures",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailures"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 50,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Partner Connectivity"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 51,
+                "width": 24,
+                "height": 8,
+                "properties": {
+                  "title": "Partner connectivity",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "period": 300,
+                  "stat": "Sum",
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 20
+                    }
+                  },
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "StaleConnection"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 59,
+                "width": 24,
+                "height": 8,
+                "properties": {
+                  "title": "BreachEvents, PartnerInBreach",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "period": 300,
+                  "stat": "Sum",
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 20
+                    }
+                  },
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "BreachEvents"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerInBreach\"', 'Sum', 300)",
+                        "id": "e2",
+                        "label": "PartnerInBreach"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 67,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Alerting"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 68,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "SNSNotificationsSent",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "SNSNotificationsSent"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 68,
+                "width": 16,
+                "height": 6,
+                "properties": {
+                  "title": "ActiveIncidents",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "period": 300,
+                  "stat": "Sum",
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 20
+                    }
+                  },
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)",
+                        "id": "e1",
+                        "label": "ActiveIncidents"
+                      }
+                    ]
                   ]
                 }
               }
@@ -414,3 +736,8 @@ Resources:
             - !Split
               - ":"
               - Fn::ImportValue: !Sub process-payload-manifest-lambda-arn-${Env}
+          CcdaExtractionFunctionName: !Select
+            - 6
+            - !Split
+              - ":"
+              - Fn::ImportValue: !Sub project-hie-analytics-ccda-extraction-arn-${Env}
