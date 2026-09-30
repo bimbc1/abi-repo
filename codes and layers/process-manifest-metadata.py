@@ -187,6 +187,49 @@ def get_object_metadata(bucket, key):
 PROCESSED_TAG_VALUE = "true"
 MANIFEST_SENT_TAG_KEY = "manifest-metadata-sent"
 REPORT_SENT_TAG_KEY = "report-metadata-sent"
+
+    # --- BATCH ARRIVAL LOGGING & BUCKET FILE COUNT ---
+def count_total_files_in_bucket(bucket):
+    """Count all objects (excluding folder placeholders) in the S3 bucket."""
+    total = 0
+    token = None
+    while True:
+        kwargs = {"Bucket": bucket}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            if not obj["Key"].endswith("/"):
+                total += 1
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    return total
+
+
+def log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_key, report_key, zip_key):
+    """Log the files received for a complete batch, then the total file count in the bucket."""
+    try:
+        batch_files = [os.path.basename(k) for k in (manifest_key, report_key, zip_key) if k]
+        logger.info(
+            "Batch %s | type=%s | Batch received with %d file(s): %s",
+            batch_id,
+            batch_type,
+            len(batch_files),
+            ", ".join(batch_files),
+        )
+        total_files = count_total_files_in_bucket(bucket)
+        logger.info(
+            "Bucket %s | Total number of files currently present in S3 bucket: %d",
+            bucket,
+            total_files,
+        )
+    except Exception as e:
+        logger.warning(
+            "Batch %s | Could not log batch/bucket file counts: %s", batch_id, e
+        )
+
 def _get_object_tags(bucket, key):
     try:
         tags = s3.get_object_tagging(Bucket=bucket, Key=key)
@@ -986,6 +1029,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     if is_batch_already_sent(bucket, manifest_key):
         logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type)
         return None
+    log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_key, report_key, zip_key)
     manifest_meta = get_object_metadata(bucket, manifest_key)
     report_meta = get_object_metadata(bucket, report_key)
     zip_meta = get_object_metadata(bucket, zip_key)
