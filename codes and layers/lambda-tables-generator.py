@@ -3,7 +3,7 @@ import json
 import logging
 import boto3
 import psycopg2
-    # ---RETRY UTILITY IMPORT WITH FALLBACK---
+    # ---RETRY UTILITY IMPORT WITH FALLBACK----
 try:
     import retry_utils
 except ImportError as e:
