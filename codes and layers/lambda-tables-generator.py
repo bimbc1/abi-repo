@@ -203,6 +203,37 @@ def ensure_tables(cur):
             CONSTRAINT unique_batch UNIQUE (file_name)
         );
     """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS extracted_files (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            batch_id TEXT NOT NULL,
+            ccda_file_name TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            partner_id UUID,
+            document_loinc_code VARCHAR(50),
+            output_s3_key TEXT NOT NULL,
+            output_version_id TEXT,
+            extracted_at_utc TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_extracted UNIQUE (batch_id, ccda_file_name, direction)
+        );
+    """)
+
+
+    # ---CREATING EXTRACTION_FILTER_CONFIG TABLE---
+    # Drives what the extraction Lambda pulls. NULL = wildcard, so one table covers
+    # every mode: partner+LOINC, partner-only, LOINC-only (shared across partners), or all.
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS extraction_filter_config (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            partner_id UUID NULL REFERENCES partner_registry(partner_id),
+            document_loinc_code VARCHAR(50) NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            description TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_filter UNIQUE (partner_id, document_loinc_code)
+        );
+    """)
     # ---RENAME LEGACY COLUMN batch_name -> file_name IF PRESENT---
     cur.execute("""
         DO $$
