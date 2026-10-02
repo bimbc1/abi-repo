@@ -1,5 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: HIE Analytics Operational Monitoring CloudWatch Dashboard and Alarms
+Description: Alarms and dashboard for the Manifest Metadata Lambda's CloudWatch
+  metrics. These metrics are published directly by the Lambda via
+  cloudwatch.put_metric_data() (see put_metric() in manifest_metadata_lambda.py)
+  -- this template does not create any metrics itself, it only watches (Alarms)
+  and displays (Dashboard) the ones the Lambda is already publishing. Same
+  pattern as the partner's business-monitoring template.
 
 Parameters:
   Env:
@@ -182,6 +187,20 @@ Resources:
                       {
                         "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)",
                         "id": "e1",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "FILL(SUM(e1), 0)",
+                        "id": "filled",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "RUNNING_SUM(filled)",
+                        "id": "received",
                         "label": "FilesIn"
                       }
                     ]
@@ -189,13 +208,13 @@ Resources:
                   "annotations": {
                     "horizontal": [
                       {
-                        "label": "below files",
-                        "value": 287,
+                        "label": "Below 288 files",
+                        "value": 288,
                         "fill": "below",
                         "color": "#d13212"
                       },
                       {
-                        "label": "above files",
+                        "label": "288 files received",
                         "value": 288,
                         "fill": "above",
                         "color": "#2ca02c"
@@ -260,26 +279,6 @@ Resources:
                     [
                       "HIE/OperationalMonitoring",
                       "RetryHandlerInvocationFailures"
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 6,
-                "y": 17,
-                "width": 6,
-                "height": 6,
-                "properties": {
-                  "title": "DatabaseConnectionRetries",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "DatabaseConnectionRetries"
                     ]
                   ]
                 }
@@ -673,26 +672,6 @@ Resources:
                 "height": 1,
                 "properties": {
                   "markdown": "## Alerting"
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 68,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "SNSNotificationsSent",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "SNSNotificationsSent"
-                    ]
-                  ]
                 }
               },
               {
