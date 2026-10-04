@@ -163,24 +163,24 @@ Resources:
                 "type": "metric",
                 "x": 8,
                 "y": 3,
-                "width": 6,
+                "width": 16,
                 "height": 6,
                 "properties": {
                   "title": "FilesIn",
                   "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "period": 300,
+                  "view": "timeSeries",
+                  "period": 1800,
                   "stat": "Sum",
                   "yAxis": {
                     "left": {
                       "min": 0,
-                      "max": 288
+                      "showUnits": false
                     }
                   },
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 1800)",
                         "id": "e1",
                         "visible": false
                       }
@@ -188,29 +188,31 @@ Resources:
                     [
                       {
                         "expression": "FILL(SUM(e1), 0)",
-                        "id": "filled",
-                        "visible": false
+                        "id": "files",
+                        "label": "Files received per 30 min (total: ${!SUM})",
+                        "color": "#1f77b4"
                       }
                     ],
                     [
                       {
-                        "expression": "RUNNING_SUM(filled)",
-                        "id": "received",
-                        "label": "FilesIn"
+                        "expression": "files*0+6",
+                        "id": "expected",
+                        "label": "Expected: 6 files per 30 min",
+                        "color": "#7f7f7f"
                       }
                     ]
                   ],
                   "annotations": {
                     "horizontal": [
                       {
-                        "label": "Below 288 files",
-                        "value": 288,
+                        "label": "Below expected",
+                        "value": 6,
                         "fill": "below",
                         "color": "#d13212"
                       },
                       {
-                        "label": "288 files received",
-                        "value": 288,
+                        "label": "Expected met",
+                        "value": 6,
                         "fill": "above",
                         "color": "#2ca02c"
                       }
@@ -488,13 +490,6 @@ Resources:
                   "stat": "Sum",
                   "metrics": [
                     [
-                      {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)",
-                        "id": "e1",
-                        "label": "ActiveIncidents"
-                      }
-                    ],
-                    [
                       "HIE/OperationalMonitoring",
                       "S3ObjectArrivals",
                       {
@@ -515,20 +510,22 @@ Resources:
                   "region": "${AWS::Region}",
                   "view": "timeSeries",
                   "period": 300,
-                  "stat": "Sum",
+                  "stat": "Average",
                   "metrics": [
                     [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds",
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)",
-                        "id": "e1",
-                        "label": "ActiveIncidents"
+                        "label": "Average delay",
+                        "stat": "Average"
                       }
                     ],
                     [
                       "HIE/OperationalMonitoring",
                       "ProcessingDelaySeconds",
                       {
-                        "label": "ProcessingDelays"
+                        "label": "Maximum delay",
+                        "stat": "Maximum"
                       }
                     ]
                   ]
@@ -603,24 +600,24 @@ Resources:
                 "properties": {
                   "title": "Partner connectivity",
                   "region": "${AWS::Region}",
-                  "view": "gauge",
+                  "view": "bar",
                   "period": 300,
                   "stat": "Sum",
                   "yAxis": {
                     "left": {
-                      "min": 0,
-                      "max": 20
+                      "min": 0
                     }
                   },
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum')",
                         "id": "e1",
                         "label": "StaleConnection"
                       }
                     ]
-                  ]
+                  ],
+                  "setPeriodToTimeRange": true
                 }
               },
               {
@@ -632,31 +629,31 @@ Resources:
                 "properties": {
                   "title": "BreachEvents, PartnerInBreach",
                   "region": "${AWS::Region}",
-                  "view": "gauge",
+                  "view": "bar",
                   "period": 300,
                   "stat": "Sum",
                   "yAxis": {
                     "left": {
-                      "min": 0,
-                      "max": 20
+                      "min": 0
                     }
                   },
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum')",
                         "id": "e1",
                         "label": "BreachEvents"
                       }
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerInBreach\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerInBreach\"', 'Sum')",
                         "id": "e2",
                         "label": "PartnerInBreach"
                       }
                     ]
-                  ]
+                  ],
+                  "setPeriodToTimeRange": true
                 }
               },
               {
@@ -678,24 +675,24 @@ Resources:
                 "properties": {
                   "title": "ActiveIncidents",
                   "region": "${AWS::Region}",
-                  "view": "gauge",
+                  "view": "bar",
                   "period": 300,
                   "stat": "Sum",
                   "yAxis": {
                     "left": {
-                      "min": 0,
-                      "max": 20
+                      "min": 0
                     }
                   },
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum')",
                         "id": "e1",
                         "label": "ActiveIncidents"
                       }
                     ]
-                  ]
+                  ],
+                  "setPeriodToTimeRange": true
                 }
               }
             ]
