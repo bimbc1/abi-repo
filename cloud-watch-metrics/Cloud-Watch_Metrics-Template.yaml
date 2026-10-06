@@ -349,16 +349,6 @@ Resources:
                         "label": "Other failures",
                         "color": "#9467bd"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryHandlerInvocationFailures",
-                      "FunctionName",
-                      "${LambdaFunctionName}",
-                      {
-                        "label": "Retry handler failed",
-                        "color": "#8c564b"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -439,16 +429,6 @@ Resources:
                       {
                         "label": "Other failures",
                         "color": "#9467bd"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryHandlerInvocationFailures",
-                      "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      {
-                        "label": "Retry handler failed",
-                        "color": "#8c564b"
                       }
                     ]
                   ],
@@ -978,14 +958,6 @@ Resources:
                         "id": "e1",
                         "label": "STALE CONNECTION DETECTED",
                         "color": "#d62728"
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "IF(m1==0,0)",
-                        "id": "e2",
-                        "label": "CONNECTION HEALTHY",
-                        "color": "#2ca02c"
                       }
                     ]
                   ],
