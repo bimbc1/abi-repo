@@ -9,6 +9,9 @@ Parameters:
       - stg
       - prod
 
+Conditions:
+  IsGovCloud: !Equals [!Ref 'AWS::Partition', aws-us-gov]
+
 Resources:
 
   # ---------------------------------------------------------------------
@@ -179,17 +182,20 @@ Resources:
                   },
                   "metrics": [
                     [
+                      "HIE/OperationalMonitoring",
+                      "S3ObjectArrivals",
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 1800)",
                         "id": "e1",
+                        "stat": "Sum",
+                        "period": 1800,
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "FILL(SUM(e1), 0)",
+                        "expression": "FILL(e1, 0)",
                         "id": "files",
-                        "label": "Files received per 30 min (total: ${!SUM})",
+                        "label": "Received Files: ${!SUM}",
                         "color": "#1f77b4"
                       }
                     ],
@@ -197,7 +203,7 @@ Resources:
                       {
                         "expression": "files*0+6",
                         "id": "expected",
-                        "label": "Expected: 6 files per 30 min",
+                        "label": "Expected Files: ${!SUM}",
                         "color": "#7f7f7f"
                       }
                     ]
@@ -239,15 +245,43 @@ Resources:
                 "properties": {
                   "title": "Authentication",
                   "region": "${AWS::Region}",
-                  "view": "singleValue",
+                  "view": "gauge",
                   "period": 300,
                   "stat": "Sum",
+                  "start": "-PT24H",
+                  "end": "P0D",
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
                   "metrics": [
                     [
                       "HIE/OperationalMonitoring",
-                      "DatabaseConnectionFailures"
+                      "DatabaseConnectionFailures",
+                      {
+                        "label": "Database connection failures (last 24h)"
+                      }
                     ]
-                  ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK (3 or fewer)",
+                        "value": 3,
+                        "fill": "below"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "More than 3 in 24h",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
                 }
               },
               {
@@ -264,25 +298,187 @@ Resources:
                 "type": "metric",
                 "x": 0,
                 "y": 17,
-                "width": 6,
+                "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "RetryHandlerInvocationFailures",
+                  "title": "Retries by failure type - Manifest Metadata Lambda",
                   "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
+                  "view": "gauge",
                   "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
                   "metrics": [
                     [
                       "HIE/OperationalMonitoring",
-                      "RetryHandlerInvocationFailures"
+                      "RetryEvents",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      "FailureType",
+                      "OtherFailure",
+                      {
+                        "label": "Other failures",
+                        "color": "#9467bd"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryHandlerInvocationFailures",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      {
+                        "label": "Retry handler failed",
+                        "color": "#8c564b"
+                      }
                     ]
-                  ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 5,
+                        "fill": "above"
+                      }
+                    ]
+                  }
                 }
               },
               {
                 "type": "metric",
-                "x": 12,
+                "x": 8,
+                "y": 17,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Retries by failure type - CCDA Extraction Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      "FailureType",
+                      "OtherFailure",
+                      {
+                        "label": "Other failures",
+                        "color": "#9467bd"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryHandlerInvocationFailures",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      {
+                        "label": "Retry handler failed",
+                        "color": "#8c564b"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 5,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
                 "y": 17,
                 "width": 8,
                 "height": 6,
@@ -313,163 +509,19 @@ Resources:
                 }
               },
               {
-                "type": "metric",
+                "type": "text",
                 "x": 0,
                 "y": 24,
-                "width": 8,
-                "height": 6,
+                "width": 24,
+                "height": 3,
                 "properties": {
-                  "title": "Lambda Invocations",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "AWS/Lambda",
-                      "Invocations",
-                      "FunctionName",
-                      "${LambdaFunctionName}",
-                      {
-                        "label": "Invocations"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 24,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Lambda Errors",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "AWS/Lambda",
-                      "Errors",
-                      "FunctionName",
-                      "${LambdaFunctionName}",
-                      {
-                        "label": "Errors",
-                        "color": "#d13212"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 16,
-                "y": 24,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Lambda Throttles",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "AWS/Lambda",
-                      "Throttles",
-                      "FunctionName",
-                      "${LambdaFunctionName}",
-                      {
-                        "label": "Throttles",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "CCDA Extraction Lambda Invocations",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "AWS/Lambda",
-                      "Invocations",
-                      "FunctionName",
-                      "${CcdaExtractionFunctionName}",
-                      {
-                        "label": "Invocations"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "CCDA Extraction Lambda Errors",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "AWS/Lambda",
-                      "Errors",
-                      "FunctionName",
-                      "${CcdaExtractionFunctionName}",
-                      {
-                        "label": "Errors",
-                        "color": "#d13212"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 16,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "CCDA Extraction Lambda Throttles",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "AWS/Lambda",
-                      "Throttles",
-                      "FunctionName",
-                      "${CcdaExtractionFunctionName}",
-                      {
-                        "label": "Throttles",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ]
+                  "markdown": "Open the CloudWatch monitoring page for each Lambda function:\n\n${LambdaHealthButtons}"
                 }
               },
               {
                 "type": "text",
                 "x": 0,
-                "y": 36,
+                "y": 27,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -479,7 +531,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 37,
+                "y": 28,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -502,7 +554,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 37,
+                "y": 28,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -534,7 +586,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 37,
+                "y": 28,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -554,7 +606,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 43,
+                "y": 34,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -564,27 +616,169 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 44,
-                "width": 6,
+                "y": 35,
+                "width": 12,
                 "height": 6,
                 "properties": {
-                  "title": "CRUDFailures",
+                  "title": "CRUD failures by type - Manifest Metadata Lambda",
                   "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
+                  "view": "gauge",
                   "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
                   "metrics": [
                     [
                       "HIE/OperationalMonitoring",
-                      "CRUDFailures"
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      "FailureType",
+                      "IntegrityViolation",
+                      {
+                        "label": "Integrity violation",
+                        "color": "#ff7f0e"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      "FailureType",
+                      "QueryFailure",
+                      {
+                        "label": "Query failure",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${LambdaFunctionName}",
+                      "FailureType",
+                      "OtherFailure",
+                      {
+                        "label": "Other failures",
+                        "color": "#9467bd"
+                      }
                     ]
-                  ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 5,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 35,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "CRUD failures by type - CCDA Extraction Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      "FailureType",
+                      "IntegrityViolation",
+                      {
+                        "label": "Integrity violation",
+                        "color": "#ff7f0e"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      "FailureType",
+                      "QueryFailure",
+                      {
+                        "label": "Query failure",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${CcdaExtractionFunctionName}",
+                      "FailureType",
+                      "OtherFailure",
+                      {
+                        "label": "Other failures",
+                        "color": "#9467bd"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 5,
+                        "fill": "above"
+                      }
+                    ]
+                  }
                 }
               },
               {
                 "type": "text",
                 "x": 0,
-                "y": 50,
+                "y": 41,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -594,104 +788,121 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 51,
+                "y": 42,
                 "width": 24,
-                "height": 8,
+                "height": 6,
                 "properties": {
-                  "title": "Partner connectivity",
+                  "title": "Partner Connectivity - Current Connection Status",
                   "region": "${AWS::Region}",
-                  "view": "bar",
-                  "period": 300,
-                  "stat": "Sum",
-                  "yAxis": {
-                    "left": {
-                      "min": 0
-                    }
-                  },
                   "metrics": [
                     [
                       {
                         "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum')",
-                        "id": "e1",
-                        "label": "StaleConnection"
-                      }
-                    ]
-                  ],
-                  "setPeriodToTimeRange": true
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 59,
-                "width": 24,
-                "height": 8,
-                "properties": {
-                  "title": "BreachEvents, PartnerInBreach",
-                  "region": "${AWS::Region}",
-                  "view": "bar",
-                  "period": 300,
-                  "stat": "Sum",
-                  "yAxis": {
-                    "left": {
-                      "min": 0
-                    }
-                  },
-                  "metrics": [
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum')",
-                        "id": "e1",
-                        "label": "BreachEvents"
+                        "id": "s1",
+                        "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"PartnerInBreach\"', 'Sum')",
+                        "expression": "SUM(s1)",
+                        "id": "m1",
+                        "label": "Stale connections",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m1>0,m1)",
+                        "id": "e1",
+                        "label": "STALE CONNECTION DETECTED",
+                        "color": "#d62728"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m1==0,0)",
                         "id": "e2",
-                        "label": "PartnerInBreach"
+                        "label": "CONNECTION HEALTHY",
+                        "color": "#2ca02c"
                       }
                     ]
                   ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
                   "setPeriodToTimeRange": true
                 }
               },
               {
-                "type": "text",
+                "type": "metric",
                 "x": 0,
-                "y": 67,
+                "y": 48,
                 "width": 24,
-                "height": 1,
+                "height": 6,
                 "properties": {
-                  "markdown": "## Alerting"
+                  "title": "Partner Connectivity - Breach Status",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum')",
+                        "id": "s2",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(s2)",
+                        "id": "m2",
+                        "label": "Breach events",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m2>0,m2)",
+                        "id": "e3",
+                        "label": "IN BREACH",
+                        "color": "#d62728"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m2==0,0)",
+                        "id": "e4",
+                        "label": "NO BREACH DETECTED",
+                        "color": "#2ca02c"
+                      }
+                    ]
+                  ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
                 }
               },
               {
                 "type": "metric",
-                "x": 8,
-                "y": 68,
-                "width": 16,
+                "x": 0,
+                "y": 54,
+                "width": 24,
                 "height": 6,
                 "properties": {
-                  "title": "ActiveIncidents",
+                  "title": "Partners Not In Breach",
                   "region": "${AWS::Region}",
-                  "view": "bar",
-                  "period": 300,
-                  "stat": "Sum",
-                  "yAxis": {
-                    "left": {
-                      "min": 0
-                    }
-                  },
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,FailureCategory} MetricName=\"ActiveIncidents\"', 'Sum')",
-                        "id": "e1",
-                        "label": "ActiveIncidents"
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\"', 'Sum')",
+                        "id": "s3",
+                        "label": "${!PROP('Dim.PartnerName')} (ID ${!PROP('Dim.PartnerId')})",
+                        "color": "#2ca02c"
                       }
                     ]
                   ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
                   "setPeriodToTimeRange": true
                 }
               }
@@ -706,4 +917,39 @@ Resources:
             - 6
             - !Split
               - ":"
-              - Fn::ImportValue: !Sub project-hie-analytics-ccda-extraction-arn-${Env}
+              - Fn::ImportValue: !Sub process-table-generator-lambda-arn-${Env}
+          # ---------------------------------------------------------------
+          # LAMBDA HEALTH BUTTONS -- one list item per Lambda function.
+          # To add a Lambda to the Lambda Health section, copy one item
+          # below, change the Label and the export name. Nothing else in
+          # the template needs to change.
+          # ---------------------------------------------------------------
+          LambdaHealthButtons: !Join
+            - " "
+            - - !Sub
+                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - Label: Manifest Metadata Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ":"
+                      - Fn::ImportValue: !Sub process-payload-manifest-lambda-arn-${Env}
+                  Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
+              - !Sub
+                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - Label: CCDA Extraction Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ":"
+                      - Fn::ImportValue: !Sub process-table-generator-lambda-arn-${Env}
+                  Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
+              - !Sub
+                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - Label: Database Processor Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ":"
+                      - Fn::ImportValue: !Sub DatabaseProcessorLambdaArn-${Env}
+                  Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
