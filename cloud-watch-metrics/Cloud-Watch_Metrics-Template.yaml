@@ -378,7 +378,7 @@ Resources:
                       {
                         "color": "#d13212",
                         "label": "Critical",
-                        "value": 5,
+                        "value": 3,
                         "fill": "above"
                       }
                     ]
@@ -469,7 +469,7 @@ Resources:
                       {
                         "color": "#d13212",
                         "label": "Critical",
-                        "value": 5,
+                        "value": 3,
                         "fill": "above"
                       }
                     ]
@@ -687,7 +687,7 @@ Resources:
                       {
                         "color": "#d13212",
                         "label": "Critical",
-                        "value": 5,
+                        "value": 3,
                         "fill": "above"
                       }
                     ]
@@ -768,7 +768,7 @@ Resources:
                       {
                         "color": "#d13212",
                         "label": "Critical",
-                        "value": 5,
+                        "value": 3,
                         "fill": "above"
                       }
                     ]
