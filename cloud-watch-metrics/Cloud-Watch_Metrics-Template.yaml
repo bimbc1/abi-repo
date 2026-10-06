@@ -392,7 +392,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Retries by failure type - CCDA Extraction Lambda",
+                  "title": "Retries by failure type - Tables Generator Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -409,7 +409,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
                       "FailureType",
                       "DatabaseConnectionFailure",
                       {
@@ -421,7 +421,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
                       "FailureType",
                       "SQSPublishFailure",
                       {
@@ -433,7 +433,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
                       "FailureType",
                       "OtherFailure",
                       {
@@ -445,7 +445,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryHandlerInvocationFailures",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
                       {
                         "label": "Retry handler failed",
                         "color": "#8c564b"
@@ -701,7 +701,7 @@ Resources:
                 "width": 12,
                 "height": 6,
                 "properties": {
-                  "title": "CRUD failures by type - CCDA Extraction Lambda",
+                  "title": "CRUD failures by type -  Tables Generator Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -718,7 +718,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
                       "FailureType",
                       "IntegrityViolation",
                       {
@@ -730,7 +730,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
                       "FailureType",
                       "QueryFailure",
                       {
@@ -742,7 +742,169 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${CcdaExtractionFunctionName}",
+                      "${TablesGeneratorFunctionName}",
+                      "FailureType",
+                      "OtherFailure",
+                      {
+                        "label": "Other failures",
+                        "color": "#9467bd"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 35,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "CRUD failures by type - Database Processor Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "IntegrityViolation",
+                      {
+                        "label": "Integrity violation",
+                        "color": "#ff7f0e"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "QueryFailure",
+                      {
+                        "label": "Query failure",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "OtherFailure",
+                      {
+                        "label": "Other failures",
+                        "color": "#9467bd"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 35,
+                "width": 12,
+                "height": 6,
+                "properties": {
+                  "title": "CRUD failures by type - Process Monitoring Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${ProcessMonitoringFunctionName}",
+                      "FailureType",
+                      "IntegrityViolation",
+                      {
+                        "label": "Integrity violation",
+                        "color": "#ff7f0e"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${ProcessMonitoringFunctionName}",
+                      "FailureType",
+                      "QueryFailure",
+                      {
+                        "label": "Query failure",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${ProcessMonitoringFunctionName}",
                       "FailureType",
                       "OtherFailure",
                       {
@@ -913,11 +1075,21 @@ Resources:
             - !Split
               - ":"
               - Fn::ImportValue: !Sub process-payload-manifest-lambda-arn-${Env}
-          CcdaExtractionFunctionName: !Select
+          TablesGeneratorFunctionName: !Select
             - 6
             - !Split
               - ":"
               - Fn::ImportValue: !Sub process-table-generator-lambda-arn-${Env}
+          DatabaseProcessorFunctionName: !Select
+            - 6
+            - !Split
+              - ":"
+              - Fn::ImportValue: !Sub DatabaseProcessorLambdaArn-${Env}
+          ProcessMonitoringFunctionName: !Select
+            - 6
+            - !Split
+              - ":"
+              - Fn::ImportValue: !Sub process-monitoring-lambda-arn-${Env}
           # ---------------------------------------------------------------
           # LAMBDA HEALTH BUTTONS -- one list item per Lambda function.
           # To add a Lambda to the Lambda Health section, copy one item
@@ -937,7 +1109,7 @@ Resources:
                   Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
               - !Sub
                 - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
-                - Label: CCDA Extraction Lambda
+                - Label: Tables Generator Lambda
                   Fn: !Select
                     - 6
                     - !Split
@@ -953,3 +1125,13 @@ Resources:
                       - ":"
                       - Fn::ImportValue: !Sub DatabaseProcessorLambdaArn-${Env}
                   Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
+              - !Sub
+                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - Label: Process Monitoring Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ":"
+                      - Fn::ImportValue: !Sub process-monitoring-lambda-arn-${Env}
+                  Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
+
