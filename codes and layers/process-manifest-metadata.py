@@ -46,6 +46,7 @@ DB_HOST             = os.environ["DB_HOST"]
 DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME             = os.environ.get("DB_NAME")
 INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
+FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
     # --AWS CLIENTS---
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
@@ -55,16 +56,20 @@ sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 def invoke_retry_handler(error, event):
     if isinstance(error, DatabaseConnectionError):
         retry_metric_name = "DatabaseConnectionRetries"
+        failure_type = "DatabaseConnectionFailure"
     elif isinstance(error, SQSPublishError):
         retry_metric_name = "SQSPublishRetries"
+        failure_type = "SQSPublishFailure"
     else:
         retry_metric_name = "SNSRetries"
+        failure_type = "OtherFailure"
         # ---PUTTING METRIC FOR RETRY---
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name=retry_metric_name,
         value=1
     )
+    put_failure_metric("RetryEvents", failure_type)
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
@@ -76,6 +81,7 @@ def invoke_retry_handler(error, event):
             metric_name="RetryHandlerInvocationFailures",
             value=1
         )
+        put_failure_metric("RetryHandlerInvocationFailures")
         return False
     # ---HELPER FUNCTIONS---
 def utc_now_iso():
@@ -936,6 +942,15 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             metric_name="CRUDFailures",
             value=1
         )
+        if isinstance(e, DatabaseConnectionError):
+            crud_failure_type = "DatabaseConnectionFailure"
+        elif isinstance(e, psycopg2.IntegrityError):
+            crud_failure_type = "IntegrityViolation"
+        elif isinstance(e, psycopg2.Error):
+            crud_failure_type = "QueryFailure"
+        else:
+            crud_failure_type = "OtherFailure"
+        put_failure_metric("CRUDFailureEvents", crud_failure_type)
         put_metric(
             namespace="HIE/PartnerMonitoring",
             metric_name="Errors",
@@ -975,6 +990,17 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         value=1 if breach_cleared else 0,
         unit="Count",
         dimensions=[{"Name": "PartnerName", "Value": partner_name}]
+    )
+    # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
+    put_metric(
+        namespace="HIE/PartnerMonitoring",
+        metric_name="PartnerNotInBreach",
+        value=1,
+        unit="Count",
+        dimensions=[
+            {"Name": "PartnerName", "Value": str(partner_name)},
+            {"Name": "PartnerId", "Value": str(partner_id)}
+        ]
     )
     return {
         "partner_id": partner_id,
@@ -1137,6 +1163,17 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
         )
     except Exception as e:
         logger.warning("Failed to publish metric %s: %s", metric_name, e)
+def put_failure_metric(metric_name, failure_type=None):
+    """Publish a failure metric tagged with this Lambda's name and failure type."""
+    dimensions = [{"Name": "FunctionName", "Value": FUNCTION_NAME}]
+    if failure_type:
+        dimensions.append({"Name": "FailureType", "Value": failure_type})
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name=metric_name,
+        value=1,
+        dimensions=dimensions
+    )
     # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
