@@ -493,7 +493,7 @@ def get_partner_name(cur, partner_id):
     row = cur.fetchone()
     return row[0] if row else f"Partner {partner_id}"
     # --- PARTNER TRANSMISSION STATE TRACKING ---
-def update_partner_state(cur, partner_id, object_key):
+def update_partner_state(cur, partner_id, object_key, partner_name=None):
     now = datetime.now(timezone.utc)
     filename = os.path.basename(object_key)
     batch_id = extract_batch_id(filename)
@@ -563,6 +563,17 @@ def update_partner_state(cur, partner_id, object_key):
                 value=1,
                 unit="Count",
                 dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+            )
+            # ---STALE CONNECTION PER PARTNER NAME (used by the dashboard Partner dropdown)---
+            put_metric(
+                namespace="HIE/PartnerMonitoring",
+                metric_name="StaleConnection",
+                value=1,
+                unit="Count",
+                dimensions=[
+                    {"Name": "PartnerId", "Value": str(partner_id)},
+                    {"Name": "PartnerName", "Value": str(partner_name)}
+                ]
             )
     # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id, expected_interval_seconds):
@@ -925,7 +936,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             partner_name = get_partner_name(cur, partner_id)
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
-            update_partner_state(cur, partner_id, latest_meta["key"])
+            update_partner_state(cur, partner_id, latest_meta["key"], partner_name)
             elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
             sample_count = get_partner_sample_count(cur, partner_id)
             if sample_count < MIN_SAMPLES_BEFORE_LEARNING:
