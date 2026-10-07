@@ -8,6 +8,11 @@ Parameters:
       - dev
       - stg
       - prod
+  PartnerNames:
+    Type: CommaDelimitedList
+    Default: Oracle Health
+    Description: Partner names shown in the dashboard Partner dropdown (comma separated,
+      spelled exactly as in the PartnerName metric dimension). "All" is always added.
 
 Conditions:
   IsGovCloud: !Equals [!Ref 'AWS::Partition', aws-us-gov]
@@ -108,6 +113,18 @@ Resources:
       DashboardBody: !Sub
         - |
           {
+            "variables": [
+              {
+                "type": "pattern",
+                "pattern": "__PARTNER__",
+                "inputType": "select",
+                "id": "partner",
+                "label": "Partner",
+                "visible": true,
+                "values": [${PartnerDropdownValues}],
+                "defaultValue": "PartnerName"
+              }
+            ],
             "widgets": [
               {
                 "type": "text",
@@ -245,18 +262,12 @@ Resources:
                 "properties": {
                   "title": "Authentication",
                   "region": "${AWS::Region}",
-                  "view": "gauge",
+                  "view": "singleValue",
                   "period": 300,
                   "stat": "Sum",
                   "start": "-PT24H",
                   "end": "P0D",
                   "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
                   "metrics": [
                     [
                       "HIE/OperationalMonitoring",
@@ -265,23 +276,7 @@ Resources:
                         "label": "Database connection failures (last 24h)"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK (3 or fewer)",
-                        "value": 3,
-                        "fill": "below"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "More than 3 in 24h",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
@@ -337,18 +332,6 @@ Resources:
                         "label": "SQS publish",
                         "color": "#ff7f0e"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${LambdaFunctionName}",
-                      "FailureType",
-                      "OtherFailure",
-                      {
-                        "label": "Other failures",
-                        "color": "#9467bd"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -377,7 +360,7 @@ Resources:
               },
               {
                 "type": "metric",
-                "x": 8,
+                "x": 0,
                 "y": 17,
                 "width": 8,
                 "height": 6,
@@ -418,17 +401,143 @@ Resources:
                         "label": "SQS publish",
                         "color": "#ff7f0e"
                       }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 17,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Retries by failure type - Database Processor Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
                     ],
                     [
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${TablesGeneratorFunctionName}",
+                      "${DatabaseProcessorFunctionName}",
                       "FailureType",
-                      "OtherFailure",
+                      "SQSPublishFailure",
                       {
-                        "label": "Other failures",
-                        "color": "#9467bd"
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 17,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Retries by failure type - Monitoring Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ProcessMonitoringFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ProcessMonitoringFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
                       }
                     ]
                   ],
@@ -495,7 +604,7 @@ Resources:
                 "width": 24,
                 "height": 3,
                 "properties": {
-                  "markdown": "Open the CloudWatch monitoring page for each Lambda function:\n\n${LambdaHealthButtons}"
+                  "markdown": "Open the CloudWatch metrics (invocations, errors, throttles, concurrent executions, duration) for each Lambda function:\n\n${LambdaHealthButtons}"
                 }
               },
               {
@@ -594,9 +703,19 @@ Resources:
                 }
               },
               {
-                "type": "metric",
+                "type": "text",
                 "x": 0,
                 "y": 35,
+                "width": 24,
+                "height": 2,
+                "properties": {
+                  "markdown": "Open the CloudWatch metrics (CPU utilization, freeable memory, free storage space) for the database:\n\n${DatabaseHealthButtons}"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 37,
                 "width": 12,
                 "height": 6,
                 "properties": {
@@ -636,18 +755,6 @@ Resources:
                         "label": "Query failure",
                         "color": "#1f77b4"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${LambdaFunctionName}",
-                      "FailureType",
-                      "OtherFailure",
-                      {
-                        "label": "Other failures",
-                        "color": "#9467bd"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -677,7 +784,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 35,
+                "y": 37,
                 "width": 12,
                 "height": 6,
                 "properties": {
@@ -717,18 +824,6 @@ Resources:
                         "label": "Query failure",
                         "color": "#1f77b4"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "OtherFailure",
-                      {
-                        "label": "Other failures",
-                        "color": "#9467bd"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -758,7 +853,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 35,
+                "y": 37,
                 "width": 12,
                 "height": 6,
                 "properties": {
@@ -798,18 +893,6 @@ Resources:
                         "label": "Query failure",
                         "color": "#1f77b4"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "OtherFailure",
-                      {
-                        "label": "Other failures",
-                        "color": "#9467bd"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -839,7 +922,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 35,
+                "y": 37,
                 "width": 12,
                 "height": 6,
                 "properties": {
@@ -879,18 +962,6 @@ Resources:
                         "label": "Query failure",
                         "color": "#1f77b4"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
-                      "FailureType",
-                      "OtherFailure",
-                      {
-                        "label": "Other failures",
-                        "color": "#9467bd"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -920,17 +991,17 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 41,
+                "y": 43,
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Partner Connectivity"
+                  "markdown": "## Partner Connectivity (select a partner from the Partner dropdown at the top)"
                 }
               },
               {
                 "type": "metric",
                 "x": 0,
-                "y": 42,
+                "y": 44,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -939,7 +1010,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"StaleConnection\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"StaleConnection\" __PARTNER__', 'Sum')",
                         "id": "s1",
                         "visible": false
                       }
@@ -970,7 +1041,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 48,
+                "y": 50,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -979,7 +1050,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\" __PARTNER__', 'Sum')",
                         "id": "s2",
                         "visible": false
                       }
@@ -1018,7 +1089,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 54,
+                "y": 56,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1027,9 +1098,24 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\" __PARTNER__', 'Maximum')",
                         "id": "s3",
-                        "label": "${!PROP('Dim.PartnerName')} (ID ${!PROP('Dim.PartnerId')})",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(s3)",
+                        "id": "m3",
+                        "label": "Partners not in breach",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m3>0,m3)",
+                        "id": "e5",
+                        "label": "NOT IN BREACH",
                         "color": "#2ca02c"
                       }
                     ]
@@ -1042,7 +1128,13 @@ Resources:
               }
             ]
           }
-        - LambdaFunctionName: !Select
+        - # Partner dropdown values: "All" first, then each name from PartnerNames.
+          PartnerDropdownValues: !Join
+            - ""
+            - - '{"value":"PartnerName","label":"All"},{"value":"'
+              - !Join ['"},{"value":"', !Ref PartnerNames]
+              - '"}'
+          LambdaFunctionName: !Select
             - 6
             - !Split
               - ":"
@@ -1063,6 +1155,22 @@ Resources:
               - ":"
               - Fn::ImportValue: !Sub process-monitoring-lambda-arn-${Env}
           # ---------------------------------------------------------------
+          # DATABASE HEALTH BUTTONS -- one list item per database. Opens
+          # CloudWatch Metrics with CPUUtilization, FreeableMemory and
+          # FreeStorageSpace for that DB instance. To add a database, copy
+          # the item below and change the Label and the export name.
+          # ---------------------------------------------------------------
+          DatabaseHealthButtons: !Join
+            - " "
+            - - !Sub
+                - "[button:primary:${Label} (${Db})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~'timeSeries~stacked~false~region~'${AWS::Region}~stat~'Average~period~300~title~'${Db}~metrics~%28~%28~'AWS*2fRDS~'CPUUtilization~'DBInstanceIdentifier~'${Db}%29~%28~'.~'FreeableMemory~'.~'.~%28yAxis~'right%29%29~%28~'.~'FreeStorageSpace~'.~'.~%28yAxis~'right%29%29%29%29)"
+                - Label: RDS Database
+                  # DB instance identifier (what CloudWatch RDS metrics are filed under).
+                  # Note: the RDSDBName-<env> export is the Postgres database name
+                  # (ccda01), not the instance identifier, so it can't be used here.
+                  Db: !Sub project-hie-analytics-cdq-${Env}-admin-registry-db
+                  Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
+          # ---------------------------------------------------------------
           # LAMBDA HEALTH BUTTONS -- one list item per Lambda function.
           # To add a Lambda to the Lambda Health section, copy one item
           # below, change the Label and the export name. Nothing else in
@@ -1071,7 +1179,7 @@ Resources:
           LambdaHealthButtons: !Join
             - " "
             - - !Sub
-                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - "[button:primary:${Label} (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~'timeSeries~stacked~false~region~'${AWS::Region}~stat~'Sum~period~300~title~'${Fn}~metrics~%28~%28~'AWS*2fLambda~'Invocations~'FunctionName~'${Fn}%29~%28~'.~'Errors~'.~'.%29~%28~'.~'Throttles~'.~'.%29~%28~'.~'ConcurrentExecutions~'.~'.~%28stat~'Maximum%29%29~%28~'.~'Duration~'.~'.~%28stat~'Average~yAxis~'right%29%29%29%29)"
                 - Label: Manifest Metadata Lambda
                   Fn: !Select
                     - 6
@@ -1080,7 +1188,7 @@ Resources:
                       - Fn::ImportValue: !Sub process-payload-manifest-lambda-arn-${Env}
                   Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
               - !Sub
-                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - "[button:primary:${Label} (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~'timeSeries~stacked~false~region~'${AWS::Region}~stat~'Sum~period~300~title~'${Fn}~metrics~%28~%28~'AWS*2fLambda~'Invocations~'FunctionName~'${Fn}%29~%28~'.~'Errors~'.~'.%29~%28~'.~'Throttles~'.~'.%29~%28~'.~'ConcurrentExecutions~'.~'.~%28stat~'Maximum%29%29~%28~'.~'Duration~'.~'.~%28stat~'Average~yAxis~'right%29%29%29%29)"
                 - Label: Tables Generator Lambda
                   Fn: !Select
                     - 6
@@ -1089,7 +1197,7 @@ Resources:
                       - Fn::ImportValue: !Sub process-table-generator-lambda-arn-${Env}
                   Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
               - !Sub
-                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - "[button:primary:${Label} (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~'timeSeries~stacked~false~region~'${AWS::Region}~stat~'Sum~period~300~title~'${Fn}~metrics~%28~%28~'AWS*2fLambda~'Invocations~'FunctionName~'${Fn}%29~%28~'.~'Errors~'.~'.%29~%28~'.~'Throttles~'.~'.%29~%28~'.~'ConcurrentExecutions~'.~'.~%28stat~'Maximum%29%29~%28~'.~'Duration~'.~'.~%28stat~'Average~yAxis~'right%29%29%29%29)"
                 - Label: Database Processor Lambda
                   Fn: !Select
                     - 6
@@ -1098,7 +1206,7 @@ Resources:
                       - Fn::ImportValue: !Sub DatabaseProcessorLambdaArn-${Env}
                   Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
               - !Sub
-                - "[button:primary:${Label} (${Fn})](https://${Host}/lambda/home?region=${AWS::Region}#/functions/${Fn}?tab=monitoring)"
+                - "[button:primary:${Label} (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~'timeSeries~stacked~false~region~'${AWS::Region}~stat~'Sum~period~300~title~'${Fn}~metrics~%28~%28~'AWS*2fLambda~'Invocations~'FunctionName~'${Fn}%29~%28~'.~'Errors~'.~'.%29~%28~'.~'Throttles~'.~'.%29~%28~'.~'ConcurrentExecutions~'.~'.~%28stat~'Maximum%29%29~%28~'.~'Duration~'.~'.~%28stat~'Average~yAxis~'right%29%29%29%29)"
                 - Label: Process Monitoring Lambda
                   Fn: !Select
                     - 6
@@ -1106,4 +1214,3 @@ Resources:
                       - ":"
                       - Fn::ImportValue: !Sub process-monitoring-lambda-arn-${Env}
                   Host: !If [IsGovCloud, console.amazonaws-us-gov.com, console.aws.amazon.com]
-
