@@ -37,7 +37,7 @@ ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
 _last_alert_times = {}
-DEFAULT_EXPECTED_INTERVAL_SECONDS   = 86400
+DEFAULT_EXPECTED_INTERVAL_SECONDS   = 1800
 MIN_SAMPLES_BEFORE_LEARNING         = 5
 sns = boto3.client("sns", region_name=AWS_REGION)
 METADATA_QUEUE_URL  = os.environ["METADATA_QUEUE_URL"]
@@ -564,17 +564,18 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
                 unit="Count",
                 dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
             )
-            # ---STALE CONNECTION PER PARTNER NAME (used by the dashboard Partner dropdown)---
-            put_metric(
-                namespace="HIE/PartnerMonitoring",
-                metric_name="StaleConnection",
-                value=1,
-                unit="Count",
-                dimensions=[
-                    {"Name": "PartnerId", "Value": str(partner_id)},
-                    {"Name": "PartnerName", "Value": str(partner_name)}
-                ]
-            )
+            # ---STALE CONNECTION PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
+            for _pid, _pname in ((str(partner_id), str(partner_name)), ("All", "All")):
+                put_metric(
+                    namespace="HIE/PartnerMonitoring",
+                    metric_name="StaleConnection",
+                    value=1,
+                    unit="Count",
+                    dimensions=[
+                        {"Name": "PartnerId", "Value": _pid},
+                        {"Name": "PartnerName", "Value": _pname}
+                    ]
+                )
     # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id, expected_interval_seconds):
     cur.execute(
@@ -929,6 +930,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     conn = None
     partner_id = partner_batch_key = environment = partner_name = None
     breach_cleared = False
+    not_in_breach_count = None
     try:
         conn = get_conn()
         with conn.cursor() as cur:
@@ -945,6 +947,20 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 expected_interval_seconds = max(60, int(round(elapsed_seconds)))
             breach_cleared = clear_breach_flag(cur, partner_id, expected_interval_seconds)
         conn.commit()
+        # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
+        try:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT COUNT(*)
+                    FROM partner_schedule
+                    WHERE breach_flag = FALSE
+                    """
+                )
+                row = cur.fetchone()
+                not_in_breach_count = row[0] if row else None
+        except Exception as count_error:
+            logger.warning("Could not count partners not in breach: %s", count_error)
     except Exception as e:
         if conn:
             conn.rollback()
@@ -1003,16 +1019,22 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         dimensions=[{"Name": "PartnerName", "Value": partner_name}]
     )
     # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
-    put_metric(
-        namespace="HIE/PartnerMonitoring",
-        metric_name="PartnerNotInBreach",
-        value=1,
-        unit="Count",
-        dimensions=[
-            {"Name": "PartnerName", "Value": str(partner_name)},
-            {"Name": "PartnerId", "Value": str(partner_id)}
-        ]
-    )
+    # Also sent as "All" (value = number of registered partners not in breach) so the
+    # dashboard Partner dropdown lists "All" and shows the total for all partners.
+    for _pid, _pname, _value in (
+        (str(partner_id), str(partner_name), 1),
+        ("All", "All", not_in_breach_count if not_in_breach_count is not None else 1),
+    ):
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerNotInBreach",
+            value=_value,
+            unit="Count",
+            dimensions=[
+                {"Name": "PartnerName", "Value": _pname},
+                {"Name": "PartnerId", "Value": _pid}
+            ]
+        )
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
