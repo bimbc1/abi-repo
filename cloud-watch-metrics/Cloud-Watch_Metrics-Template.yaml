@@ -8,11 +8,6 @@ Parameters:
       - dev
       - stg
       - prod
-  PartnerNames:
-    Type: CommaDelimitedList
-    Default: Oracle Health
-    Description: Partner names shown in the dashboard Partner dropdown (comma separated,
-      spelled exactly as in the PartnerName metric dimension). "All" is always added.
 
 Conditions:
   IsGovCloud: !Equals [!Ref 'AWS::Partition', aws-us-gov]
@@ -121,8 +116,9 @@ Resources:
                 "id": "partner",
                 "label": "Partner",
                 "visible": true,
-                "values": [${PartnerDropdownValues}],
-                "defaultValue": "PartnerName"
+                "search": "{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\"",
+                "populateFrom": "PartnerName",
+                "defaultValue": "All"
               }
             ],
             "widgets": [
@@ -995,7 +991,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Partner Connectivity (select a partner from the Partner dropdown at the top)"
+                  "markdown": "## Partner Connectivity (select a partner, or All, from the Partner dropdown at the top)"
                 }
               },
               {
@@ -1010,7 +1006,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"StaleConnection\" __PARTNER__', 'Sum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"StaleConnection\" PartnerName=\"__PARTNER__\"', 'Sum')",
                         "id": "s1",
                         "visible": false
                       }
@@ -1050,7 +1046,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\" __PARTNER__', 'Sum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"BreachEvents\" PartnerName=\"__PARTNER__\"', 'Sum')",
                         "id": "s2",
                         "visible": false
                       }
@@ -1069,14 +1065,6 @@ Resources:
                         "id": "e3",
                         "label": "IN BREACH",
                         "color": "#d62728"
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "IF(m2==0,0)",
-                        "id": "e4",
-                        "label": "NO BREACH DETECTED",
-                        "color": "#2ca02c"
                       }
                     ]
                   ],
@@ -1098,7 +1086,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\" __PARTNER__', 'Maximum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\" PartnerName=\"__PARTNER__\"', 'Maximum')",
                         "id": "s3",
                         "visible": false
                       }
@@ -1128,13 +1116,7 @@ Resources:
               }
             ]
           }
-        - # Partner dropdown values: "All" first, then each name from PartnerNames.
-          PartnerDropdownValues: !Join
-            - ""
-            - - '{"value":"PartnerName","label":"All"},{"value":"'
-              - !Join ['"},{"value":"', !Ref PartnerNames]
-              - '"}'
-          LambdaFunctionName: !Select
+        - LambdaFunctionName: !Select
             - 6
             - !Split
               - ":"
