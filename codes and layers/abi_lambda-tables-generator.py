@@ -3,7 +3,7 @@ import json
 import logging
 import boto3
 import psycopg2
-    # ---RETRY UTILITY IMPORT WITH FALLBACK----
+    # ---RETRY UTILITY IMPORT WITH FALLBACK---
 try:
     import retry_utils
 except ImportError as e:
@@ -165,8 +165,6 @@ def ensure_tables(cur):
         ADD COLUMN IF NOT EXISTS receiving_organization_id VARCHAR(64);
         ALTER TABLE patient_details
         ADD COLUMN IF NOT EXISTS commonwell_indicator BOOLEAN;
-        ALTER TABLE partner_schedule
-        ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
     """)
         # ---ENSURING THE CHECK CONSTRAINT ON SSN IS PRESENT---
     cur.execute("""
@@ -203,7 +201,6 @@ def ensure_tables(cur):
             CONSTRAINT unique_batch UNIQUE (file_name)
         );
     """)
-   
     # ---RENAME LEGACY COLUMN batch_name -> file_name IF PRESENT---
     cur.execute("""
         DO $$
@@ -249,6 +246,11 @@ def ensure_tables(cur):
     cur.execute("""
         ALTER TABLE partner_schedule
         DROP COLUMN IF EXISTS timezone;
+    """)
+        # ---ADDING EXPECTED_FILES_PER_TRANSMISSION COLUMN TO PARTNER_SCHEDULE TABLE IF IT DOES NOT EXIST---
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
     """)
     # ---CREATING PARTNER_TRANSMISSION_STATE TABLE---
     cur.execute("""
