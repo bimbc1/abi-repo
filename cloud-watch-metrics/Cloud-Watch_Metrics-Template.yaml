@@ -10,7 +10,7 @@ Parameters:
       - prod
   TransferLogGroupName:
     Type: String
-    Default: /aws/transfer/s-b9d31cb5261d41639 # put your own log group name
+    Default: /aws/transfer/s-4603e09e711e4cfa8
     Description: CloudWatch log group of the AWS Transfer Family (SFTP) server
       for this environment (/aws/transfer/<server-id>).
   ExtractorLogGroupName:
@@ -24,9 +24,9 @@ Parameters:
     Default: '?BadZipFile ?"Bad CRC-32" ?"Error -3 while decompressing"'
     Description: CloudWatch Logs filter pattern that matches the Extractor
       Lambda log line written when it cannot open or read an uploaded ZIP.
-  NewFunctionName:
+  CCDAExtractionFunctionName:
     Type: String
-    Default: new-function
+    Default: CCDA Extraction Lambda
     Description: Name of the fifth Lambda function (New Function) shown in
       Workflow Health and Database Health.
 
@@ -42,9 +42,7 @@ Conditions:
 Resources:
 
   # ---------------------------------------------------------------------
-  # ALARMS -- these watch metrics that already exist in CloudWatch. They
-  # do not care whether the metric was published by a direct API call or
-  # a log-filter; they just read the namespace + metric name.
+  # ALARMS -- these watch metrics that already exist in CloudWatch.
   # ---------------------------------------------------------------------
 
   DatabaseConnectionFailuresAlarm:
@@ -120,14 +118,10 @@ Resources:
       TreatMissingData: notBreaching
 
   # ---------------------------------------------------------------------
-  # LOG METRIC FILTERS -- turn Transfer Family and Extractor Lambda log
-  # lines into CloudWatch metrics so the dashboard can count them.
-  # Metric filters only count log events written AFTER they are created.
+  # LOG METRIC FILTERS -- 
   # ---------------------------------------------------------------------
 
   # A partner login rejected by the SFTP server (for example a wrong SSH
-  # key) is logged by Transfer Family with activity type AUTH_FAILURE
-  # (log stream ERRORS), e.g.
   #   ERRORS AUTH_FAILURE Method=publickey User=Oracle Message="..." SourceIP=...
   PartnerLoginFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -183,8 +177,6 @@ Resources:
     Properties:
       DashboardName: !Sub project-hie-analytics-operational-dashboard-${Env}
       # Function name is derived from the Lambda ARN exported by the Lambda
-      # stack (arn:<partition>:lambda:<region>:<account>:function:<NAME>),
-      # so it is never hardcoded here.
       DashboardBody: !Sub
         - |
           {
@@ -474,7 +466,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${LambdaFunctionName}",
+                      "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "DatabaseConnectionFailure",
                       {
@@ -486,7 +478,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${LambdaFunctionName}",
+                      "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "SQSPublishFailure",
                       {
@@ -681,7 +673,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${NewFunctionName}",
+                      "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "DatabaseConnectionFailure",
                       {
@@ -693,7 +685,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${NewFunctionName}",
+                      "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "SQSPublishFailure",
                       {
@@ -812,7 +804,7 @@ Resources:
                       "AWS/SQS",
                       "ApproximateNumberOfMessagesVisibletqueuedepth",
                       "QueueName",
-                      "project-hie-analytics-database-processor-dlq-${Env}"
+                      "project-hie-analytics-database-processor-queue-arn-${Env}"
                     ]
                   ]
                 }
@@ -1002,11 +994,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
+                      "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Create",
                       {
-                        "label": "Process Monitoring Lambda",
+                        "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
@@ -1014,11 +1006,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${NewFunctionName}",
+                      "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Create",
                       {
-                        "label": "New Function",
+                        "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
                     ]
@@ -1049,7 +1041,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${LambdaFunctionName}",
+                      "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Read",
                       {
@@ -1085,11 +1077,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
+                      "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Read",
                       {
-                        "label": "Process Monitoring Lambda",
+                        "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
@@ -1097,11 +1089,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${NewFunctionName}",
+                      "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Read",
                       {
-                        "label": "New Function",
+                        "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
                     ]
@@ -1132,7 +1124,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${LambdaFunctionName}",
+                      "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Update",
                       {
@@ -1168,11 +1160,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
+                      "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Update",
                       {
-                        "label": "Process Monitoring Lambda",
+                        "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
@@ -1180,11 +1172,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${NewFunctionName}",
+                      "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Update",
                       {
-                        "label": "New Function",
+                        "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
                     ]
@@ -1215,7 +1207,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${LambdaFunctionName}",
+                      "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Delete",
                       {
@@ -1251,11 +1243,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
+                      "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Delete",
                       {
-                        "label": "Process Monitoring Lambda",
+                        "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
@@ -1263,11 +1255,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${NewFunctionName}",
+                      "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Delete",
                       {
-                        "label": "New Function",
+                        "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
                     ]
@@ -1406,30 +1398,36 @@ Resources:
               }
             ]
           }
-        - LambdaFunctionName: !Select
+        - ManifestMetadataFunctionName: !Select
             - 6
             - !Split
               - ':'
               - !ImportValue
-                Fn::Sub: process-payload-manifest-lambda-arn-${Env}
+                Fn::Sub: project-hie-analytocs-process-payload-manifest-lambda-arn-${Env}
           TablesGeneratorFunctionName: !Select
             - 6
             - !Split
               - ':'
               - !ImportValue
-                Fn::Sub: process-table-generator-lambda-arn-${Env}
+                Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
           DatabaseProcessorFunctionName: !Select
             - 6
             - !Split
               - ':'
               - !ImportValue
-                Fn::Sub: DatabaseProcessorLambdaArn-${Env}
-          ProcessMonitoringFunctionName: !Select
+                Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+          CCDAExtractionFunctionName: !Select
             - 6
             - !Split
               - ':'
               - !ImportValue
-                Fn::Sub: process-monitoring-lambda-arn-${Env}
+                Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+          PayloadMonitoringFunctionName: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
           # ---------------------------------------------------------------
           # DATABASE HEALTH BUTTONS -- one list item per database. Opens
           # CloudWatch Metrics with CPUUtilization, FreeableMemory and
@@ -1445,7 +1443,7 @@ Resources:
                   # DB instance identifier (what CloudWatch RDS metrics are filed under).
                   # Note: the RDSDBName-<env> export is the Postgres database name
                   # (ccda01), not the instance identifier, so it can't be used here.
-                  Db: !Sub project-hie-analytics-cdq-${Env}-admin-registry-db
+                  Db: !Sub project-hie-analytics-admin-registry-db-${Env}
                   Host: !If
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
@@ -1467,7 +1465,7 @@ Resources:
                     - !Split
                       - ':'
                       - !ImportValue
-                        Fn::Sub: process-payload-manifest-lambda-arn-${Env}
+                        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
                   Host: !If
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
@@ -1481,7 +1479,7 @@ Resources:
                     - !Split
                       - ':'
                       - !ImportValue
-                        Fn::Sub: process-table-generator-lambda-arn-${Env}
+                        Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
                   Host: !If
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
@@ -1495,7 +1493,7 @@ Resources:
                     - !Split
                       - ':'
                       - !ImportValue
-                        Fn::Sub: DatabaseProcessorLambdaArn-${Env}
+                        Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
                   Host: !If
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
@@ -1503,13 +1501,27 @@ Resources:
               - !Sub
                 - '[button:primary:${Label}
                   (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
-                - Label: Process Monitoring Lambda
+                - Label: CCDA Extraction Lambda
                   Fn: !Select
                     - 6
                     - !Split
                       - ':'
                       - !ImportValue
-                        Fn::Sub: process-monitoring-lambda-arn-${Env}
+                        Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
+                                  - !Sub
+                - '[button:primary:${Label}
+                  (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
+                - Label: Payload Monitoring Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
                   Host: !If
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
