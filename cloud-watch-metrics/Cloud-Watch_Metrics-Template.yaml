@@ -23,10 +23,7 @@ Conditions:
   IsGovCloud: !Equals
     - !Ref AWS::Partition
     - aws-us-gov
-  HasExtractorLogGroup: !Not
-    - !Equals
-      - !Ref ExtractorLogGroupName
-      - ''
+
 
 Resources:
 
