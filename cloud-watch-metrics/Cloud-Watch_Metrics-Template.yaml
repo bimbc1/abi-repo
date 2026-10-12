@@ -13,12 +13,6 @@ Parameters:
     Default: /aws/transfer/s-4603e09e711e4cfa8
     Description: CloudWatch log group of the AWS Transfer Family (SFTP) server
       for this environment (/aws/transfer/<server-id>).
-  ExtractorLogGroupName:
-    Type: String
-    Default: ''
-    Description: CloudWatch log group of the Extractor Lambda
-      (/aws/lambda/<extractor-function-name>). Leave empty to skip the
-      File processing failures metric filter.
   FileProcessingFailurePattern:
     Type: String
     Default: '?BadZipFile ?"Bad CRC-32" ?"Error -3 while decompressing"'
