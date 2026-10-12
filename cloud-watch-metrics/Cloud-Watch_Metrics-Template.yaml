@@ -24,11 +24,6 @@ Parameters:
     Default: '?BadZipFile ?"Bad CRC-32" ?"Error -3 while decompressing"'
     Description: CloudWatch Logs filter pattern that matches the Extractor
       Lambda log line written when it cannot open or read an uploaded ZIP.
-  CCDAExtractionFunctionName:
-    Type: String
-    Default: CCDA Extraction Lambda
-    Description: Name of the fifth Lambda function (New Function) shown in
-      Workflow Health and Database Health.
 
 Conditions:
   IsGovCloud: !Equals
@@ -121,8 +116,6 @@ Resources:
   # LOG METRIC FILTERS -- 
   # ---------------------------------------------------------------------
 
-  # A partner login rejected by the SFTP server (for example a wrong SSH
-  #   ERRORS AUTH_FAILURE Method=publickey User=Oracle Message="..." SourceIP=...
   PartnerLoginFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -135,9 +128,6 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
-  # An upload that did not complete (for example the connection dropped
-  # while a ZIP was being uploaded) is logged by Transfer Family with
-  # activity type PARTIAL_CLOSE instead of the normal CLOSE.
   UploadFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -150,9 +140,6 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
-  # A ZIP that uploaded successfully but could not be opened by the
-  # Extractor Lambda (damaged / not a valid ZIP) is recorded in the
-  # Extractor Lambda's own log group, not in the Transfer Family logs.
   FileProcessingFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
     Condition: HasExtractorLogGroup
@@ -1440,9 +1427,6 @@ Resources:
                 - '[button:primary:${Label}
                   (${Db})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Average~period~300~title~''${Db}~metrics~%28~%28~''AWS*2fRDS~''CPUUtilization~''DBInstanceIdentifier~''${Db}%29~%28~''.~''FreeableMemory~''.~''.~%28yAxis~''right%29%29~%28~''.~''FreeStorageSpace~''.~''.~%28yAxis~''right%29%29%29%29)'
                 - Label: RDS Database
-                  # DB instance identifier (what CloudWatch RDS metrics are filed under).
-                  # Note: the RDSDBName-<env> export is the Postgres database name
-                  # (ccda01), not the instance identifier, so it can't be used here.
                   Db: !Sub project-hie-analytics-admin-registry-db-${Env}
                   Host: !If
                     - IsGovCloud
