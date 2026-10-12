@@ -33,6 +33,54 @@ sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
     # ---CREDENTIALS CACHING---
 _cached_creds = None
+FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+    # ---CRUD OPERATION TRACKING---
+    # Every statement run by ensure_tables() goes through TrackingCursor, which
+    # records whether it is a Create, Read, Update or Delete. When a database
+    # error happens, CRUDFailureEvents is published with that operation so the
+    # dashboard CRUD failure bar graphs show it.
+CRUD_OPERATIONS = {
+    "CREATE": "Create",
+    "INSERT": "Create",
+    "SELECT": "Read",
+    "ALTER": "Update",
+    "UPDATE": "Update",
+    "DO": "Update",
+    "DROP": "Delete",
+    "DELETE": "Delete",
+}
+_last_crud_operation = None
+def crud_operation_for(sql):
+    stripped = (sql or "").strip()
+    first_word = stripped.split(None, 1)[0].upper() if stripped else ""
+    return CRUD_OPERATIONS.get(first_word, "Other")
+class TrackingCursor:
+    """Wraps the cursor so every execute() records its CRUD operation."""
+    def __init__(self, cur):
+        global _last_crud_operation
+        _last_crud_operation = None
+        self._cur = cur
+    def execute(self, sql, params=None):
+        global _last_crud_operation
+        _last_crud_operation = crud_operation_for(sql)
+        return self._cur.execute(sql, params)
+    # ---PUBLISHING CRUD FAILURE METRIC---
+def put_crud_failure_metric(operation):
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="HIE/OperationalMonitoring",
+            MetricData=[{
+                "MetricName": "CRUDFailureEvents",
+                "Value": 1,
+                "Unit": "Count",
+                "Dimensions": [
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": operation},
+                ],
+            }],
+        )
+    except Exception as e:
+        logger.warning("Failed to publish CRUDFailureEvents metric: %s", e)
     # ---RETRY HANDLER---
 def invoke_retry_handler(error, event) -> bool:
     try:
@@ -309,10 +357,17 @@ def lambda_handler(event, context):
         }
     try:
         with conn.cursor() as cur:
-            ensure_tables(cur)
+            ensure_tables(TrackingCursor(cur))
         conn.commit()
-    except Exception:
+    except Exception as e:
         conn.rollback()
+        if isinstance(e, psycopg2.Error) and _last_crud_operation:
+            logger.error(
+                "CRUD failure | operation=%s | cause=%s",
+                _last_crud_operation,
+                type(e).__name__,
+            )
+            put_crud_failure_metric(_last_crud_operation)
         global _cached_creds
         _cached_creds = None
         logger.exception("Failed creating tables")
