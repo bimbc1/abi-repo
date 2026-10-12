@@ -269,6 +269,29 @@ pass
 class SQSPublishError(RuntimeError):
     """Raised when there is an error publishing to the SQS queue."""
 pass
+    # --- CRUD OPERATION TRACKING ---
+    # Every SQL statement goes through execute_crud(), which records whether it
+    # is a Create (INSERT), Read (SELECT), Update (UPDATE) or Delete (DELETE).
+    # When a database error happens, the failure metric is tagged with the
+    # operation that was running, so the dashboard can chart each one separately.
+CRUD_OPERATIONS = {
+    "INSERT": "Create",
+    "SELECT": "Read",
+    "UPDATE": "Update",
+    "DELETE": "Delete",
+}
+_last_crud_operation = None
+def crud_operation_for(sql):
+    stripped = (sql or "").strip()
+    first_word = stripped.split(None, 1)[0].upper() if stripped else ""
+    return CRUD_OPERATIONS.get(first_word, "Other")
+def execute_crud(cur, sql, params=None):
+    global _last_crud_operation
+    _last_crud_operation = crud_operation_for(sql)
+    cur.execute(sql, params)
+def reset_crud_tracking():
+    global _last_crud_operation
+    _last_crud_operation = None
     # --- OPERATIONAL ALERT COOLDOWN AND SNS ALERTING ---
 def _should_publish_alert(failure_category):
     """Determine whether an alert may be published for the category."""
@@ -467,7 +490,8 @@ def publish_metadata_message(message_body, message_attributes=None):
     # --FINDING PARTNER INFORMATION FROM DATABASE---
 def get_partner_info(cur, bucket_name):
     bucket_arn = f"arn:aws-us-gov:s3:::{bucket_name}"
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT partner_id, partner_batch_key, environment
         FROM partner_registry
@@ -481,7 +505,8 @@ def get_partner_info(cur, bucket_name):
     return row[0], row[1], row[2]
     #---FINDING PARTNER NAME---
 def get_partner_name(cur, partner_id):
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT partner_name
         FROM partner_contact_details
@@ -499,7 +524,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
     batch_id = extract_batch_id(filename)
     batch_prefix = f"{batch_id}_"
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT last_seen_at
         FROM partner_transmission_state
@@ -509,7 +535,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
     )
     existing_row = cur.fetchone()
     if existing_row:
-        cur.execute(
+        execute_crud(
+            cur,
             """
             UPDATE partner_transmission_state
             SET last_seen_at = %s,
@@ -521,7 +548,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
             (now, batch_id, clean_filename, now, partner_id),
         )
     else:
-        cur.execute(
+        execute_crud(
+            cur,
             """
             INSERT INTO partner_transmission_state(
                 partner_id,
@@ -546,7 +574,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
         if previous_last_seen_at.tzinfo is None:
             previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
         gap_seconds = (now - previous_last_seen_at).total_seconds()
-        cur.execute(
+        execute_crud(
+            cur,
             """
             SELECT expected_interval_seconds
             FROM partner_schedule
@@ -578,7 +607,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
                 )
     # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id, expected_interval_seconds):
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT breach_flag
         FROM partner_schedule
@@ -588,7 +618,8 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
     )
     row = cur.fetchone()
     if row is None:
-        cur.execute(
+        execute_crud(
+            cur,
             """
             INSERT INTO partner_schedule(
                 partner_id,
@@ -609,7 +640,8 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
         )
         return False
     if row[0]:
-        cur.execute(
+        execute_crud(
+            cur,
             """
             UPDATE partner_schedule
             SET breach_flag = FALSE,
@@ -621,7 +653,8 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
         )
         logger.info("Recovery detected. Breach cleared for partner_id=%s", partner_id)
         return True
-    cur.execute(
+    execute_crud(
+        cur,
         """
         UPDATE partner_schedule
         SET breach_flag = FALSE,
@@ -915,7 +948,8 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
     }
     # --- PARTNER SCHEDULE LEARNING SUPPORT ---
 def get_partner_sample_count(cur, partner_id):
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT COUNT(*)
         FROM manifest_batch
@@ -931,6 +965,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     partner_id = partner_batch_key = environment = partner_name = None
     breach_cleared = False
     not_in_breach_count = None
+    reset_crud_tracking()
     try:
         conn = get_conn()
         with conn.cursor() as cur:
@@ -950,7 +985,8 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
         try:
             with conn.cursor() as cur:
-                cur.execute(
+                execute_crud(
+                    cur,
                     """
                     SELECT COUNT(*)
                     FROM partner_schedule
@@ -961,6 +997,8 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 not_in_breach_count = row[0] if row else None
         except Exception as count_error:
             logger.warning("Could not count partners not in breach: %s", count_error)
+            if isinstance(count_error, psycopg2.Error):
+                put_failure_metric("CRUDFailureEvents", "Read")
     except Exception as e:
         if conn:
             conn.rollback()
@@ -969,14 +1007,19 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             metric_name="CRUDFailures",
             value=1
         )
+        # ---CRUD FAILURE CLASSIFICATION (Create / Read / Update / Delete)---
         if isinstance(e, DatabaseConnectionError):
             crud_failure_type = "DatabaseConnectionFailure"
-        elif isinstance(e, psycopg2.IntegrityError):
-            crud_failure_type = "IntegrityViolation"
-        elif isinstance(e, psycopg2.Error):
-            crud_failure_type = "QueryFailure"
+        elif isinstance(e, psycopg2.Error) and _last_crud_operation:
+            crud_failure_type = _last_crud_operation
         else:
             crud_failure_type = "OtherFailure"
+        logger.error(
+            "CRUD failure | operation=%s | cause=%s | batch_id=%s",
+            crud_failure_type,
+            type(e).__name__,
+            batch_id,
+        )
         put_failure_metric("CRUDFailureEvents", crud_failure_type)
         put_metric(
             namespace="HIE/PartnerMonitoring",
@@ -1000,6 +1043,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                     f"AWS Region: {AWS_REGION}\n"
                     f"Bucket: {bucket}\n"
                     f"Partner: {partner_name or 'Unknown'}\n"
+                    f"CRUD operation: {crud_failure_type}\n"
                     f"Error type: {type(e).__name__}\n"
                     f"Error message: {str(e)}\n"
                 ),
