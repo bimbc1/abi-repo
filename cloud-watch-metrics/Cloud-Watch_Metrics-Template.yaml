@@ -943,7 +943,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${LambdaFunctionName}",
+                      "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Create",
                       {
