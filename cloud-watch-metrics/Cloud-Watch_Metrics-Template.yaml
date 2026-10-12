@@ -727,7 +727,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
+                      "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "DatabaseConnectionFailure",
                       {
@@ -739,7 +739,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "RetryEvents",
                       "FunctionName",
-                      "${ProcessMonitoringFunctionName}",
+                      "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "SQSPublishFailure",
                       {
