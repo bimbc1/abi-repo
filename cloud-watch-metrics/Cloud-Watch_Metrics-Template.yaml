@@ -1388,7 +1388,7 @@ Resources:
             - !Split
               - ':'
               - !ImportValue
-                Fn::Sub: project-hie-analytocs-process-payload-manifest-lambda-arn-${Env}
+                Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
           TablesGeneratorFunctionName: !Select
             - 6
             - !Split
@@ -1494,7 +1494,7 @@ Resources:
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
                     - console.aws.amazon.com
-                                  - !Sub
+              - !Sub
                 - '[button:primary:${Label}
                   (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
                 - Label: Payload Monitoring Lambda
