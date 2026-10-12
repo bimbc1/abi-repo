@@ -133,9 +133,16 @@ Resources:
 
   FileProcessingFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
-    Condition: HasExtractorLogGroup
     Properties:
-      LogGroupName: !Ref ExtractorLogGroupName
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
       FilterPattern: !Ref FileProcessingFailurePattern
       MetricTransformations:
         - MetricNamespace: HIE/OperationalMonitoring
