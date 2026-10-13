@@ -998,7 +998,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         except Exception as count_error:
             logger.warning("Could not count partners not in breach: %s", count_error)
             if isinstance(count_error, psycopg2.Error):
-                put_failure_metric("CRUDFailureEvents", "Read")
+                put_failure_metric("CRUDFailureEvents", "Read", partner_name)
     except Exception as e:
         if conn:
             conn.rollback()
@@ -1020,7 +1020,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             type(e).__name__,
             batch_id,
         )
-        put_failure_metric("CRUDFailureEvents", crud_failure_type)
+        put_failure_metric("CRUDFailureEvents", crud_failure_type, partner_name)
         put_metric(
             namespace="HIE/PartnerMonitoring",
             metric_name="Errors",
@@ -1240,7 +1240,7 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
         )
     except Exception as e:
         logger.warning("Failed to publish metric %s: %s", metric_name, e)
-def put_failure_metric(metric_name, failure_type=None):
+def put_failure_metric(metric_name, failure_type=None, partner_name=None):
     """Publish a failure metric tagged with this Lambda's name and failure type."""
     dimensions = [{"Name": "FunctionName", "Value": FUNCTION_NAME}]
     if failure_type:
@@ -1251,6 +1251,15 @@ def put_failure_metric(metric_name, failure_type=None):
         value=1,
         dimensions=dimensions
     )
+    # ---CRUD FAILURES PER PARTNER (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
+    if metric_name == "CRUDFailureEvents":
+        for _pname in ([partner_name, "All"] if partner_name else ["All"]):
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name=metric_name,
+                value=1,
+                dimensions=dimensions + [{"Name": "PartnerName", "Value": _pname}]
+            )
     # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
