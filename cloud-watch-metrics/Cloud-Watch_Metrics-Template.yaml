@@ -12,12 +12,10 @@ Parameters:
     Type: String
     Default: /aws/transfer/s-4603e09e711e4cfa8
     Description: CloudWatch log group of the AWS Transfer Family (SFTP) server
-      for this environment (/aws/transfer/<server-id>).
   FileProcessingFailurePattern:
     Type: String
     Default: '?BadZipFile ?"Bad CRC-32" ?"Error -3 while decompressing"'
-    Description: CloudWatch Logs filter pattern that matches the Extractor
-      Lambda log line written when it cannot open or read an uploaded ZIP.
+    Description: CloudWatch Logs filter pattern that matches the Extractor lambda
 
 Conditions:
   IsGovCloud: !Equals
@@ -27,9 +25,7 @@ Conditions:
 
 Resources:
 
-  # ---------------------------------------------------------------------
   # ALARMS -- these watch metrics that already exist in CloudWatch.
-  # ---------------------------------------------------------------------
 
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -103,9 +99,7 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
-  # ---------------------------------------------------------------------
   # LOG METRIC FILTERS -- 
-  # ---------------------------------------------------------------------
 
   PartnerLoginFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -151,17 +145,12 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
-  # ---------------------------------------------------------------------
-  # DASHBOARD -- displays the metrics above plus the rest of what the
-  # Lambda publishes, grouped the same way the code groups them
-  # (HIE/OperationalMonitoring vs HIE/PartnerMonitoring).
-  # ---------------------------------------------------------------------
+  # DASHBOARD -- displays the metrics 
 
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
     Properties:
       DashboardName: !Sub project-hie-analytics-operational-dashboard-${Env}
-      # Function name is derived from the Lambda ARN exported by the Lambda
       DashboardBody: !Sub
         - |
           {
@@ -357,7 +346,7 @@ Resources:
                 }
               },
               {
-                "type": "metric",
+                "type": "log",
                 "x": 0,
                 "y": 16,
                 "width": 8,
@@ -365,20 +354,21 @@ Resources:
                 "properties": {
                   "title": "Partner login failures",
                   "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "PartnerLoginFailures",
-                      {
-                        "label": "Partner login failures",
-                        "color": "#d13212"
-                      }
-                    ]
-                  ]
+                  "view": "table",
+                  "query": "SOURCE '${TransferLogGroupName}' | filter @message like /AUTH_FAILURE/ | stats count(*) as partner_login_failures"
+                }
+              },
+              {
+                "type": "log",
+                "x": 8,
+                "y": 16,
+                "width": 16,
+                "height": 6,
+                "properties": {
+                  "title": "Partner login failures - by partner",
+                  "region": "${AWS::Region}",
+                  "view": "table",
+                  "query": "SOURCE '${TransferLogGroupName}' | fields @timestamp, user, `source-ip` | filter @message like /AUTH_FAILURE/ | stats count(*) as login_failures, max(@timestamp) as last_failure_ms, latest(`source-ip`) as source_ip by user | fields fromMillis(last_failure_ms) as last_failure_utc | sort login_failures desc | display user, login_failures, last_failure_utc, source_ip"
                 }
               },
               {
@@ -1413,12 +1403,7 @@ Resources:
               - ':'
               - !ImportValue
                 Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
-          # ---------------------------------------------------------------
-          # DATABASE HEALTH BUTTONS -- one list item per database. Opens
-          # CloudWatch Metrics with CPUUtilization, FreeableMemory and
-          # FreeStorageSpace for that DB instance. To add a database, copy
-          # the item below and change the Label and the export name.
-          # ---------------------------------------------------------------
+          # DATABASE HEALTH BUTTONS -- one list item per database. 
           DatabaseHealthButtons: !Join
             - ' '
             - - !Sub
@@ -1430,12 +1415,7 @@ Resources:
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
                     - console.aws.amazon.com
-          # ---------------------------------------------------------------
           # LAMBDA HEALTH BUTTONS -- one list item per Lambda function.
-          # To add a Lambda to the Lambda Health section, copy one item
-          # below, change the Label and the export name. Nothing else in
-          # the template needs to change.
-          # ---------------------------------------------------------------
           LambdaHealthButtons: !Join
             - ' '
             - - !Sub
