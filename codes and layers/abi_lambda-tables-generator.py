@@ -97,6 +97,10 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+    cur.execute("""
+        ALTER TABLE partner_registry
+        ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100) NOT NULL;
+    """)
         # ---CREATING PARTNER_CONTACT_DETAILS TABLE---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS partner_contact_details (
@@ -239,6 +243,7 @@ def ensure_tables(cur):
             last_breach_email_sent_at TIMESTAMPTZ,
             last_recovery_email_sent_at TIMESTAMPTZ,
             created_at TIMESTAMPTZ DEFAULT NOW(),
+            expected_files_per_transmission INTEGER DEFAULT 6,
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
