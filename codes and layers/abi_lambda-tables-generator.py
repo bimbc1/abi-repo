@@ -99,7 +99,9 @@ def ensure_tables(cur):
     """)
     cur.execute("""
         ALTER TABLE partner_registry
-        ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100) NOT NULL;
+        ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100);
+        UPDATE partner_registry SET partner_name = '' WHERE partner_name IS NULL;
+        ALTER TABLE partner_registry ALTER COLUMN partner_name SET NOT NULL;
     """)
         # ---CREATING PARTNER_CONTACT_DETAILS TABLE---
     cur.execute("""
