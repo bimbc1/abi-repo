@@ -401,7 +401,7 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "DatabaseConnectionFailures",
                       {
-                        "label": "Database connection errors (last 24h)"
+                        "label": "Database connection errors"
                       }
                     ]
                   ]
