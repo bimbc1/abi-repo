@@ -113,6 +113,37 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
+  # Per-user activity; fills the "Transfer Family user" dropdown (with the
+  # "All" entry the Manifest Lambda publishes under PartnerName).
+  TransferFamilyUsersMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TransferLogGroupName
+      FilterPattern: '{ $.user = "*" }'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: TransferFamilyUserActivity
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: PartnerName
+              Value: $.user
+
+  # Login failures per user (dimension "All" so "All" matches every user).
+  LoginFailuresByUserMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Ref TransferLogGroupName
+      FilterPattern: '{ $.activity-type = "AUTH_FAILURE" }'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: LoginFailuresByUser
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: All
+              Value: $.user
+
   UploadFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
@@ -163,6 +194,17 @@ Resources:
                 "label": "Partner",
                 "visible": true,
                 "search": "{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\"",
+                "populateFrom": "PartnerName",
+                "defaultValue": "All"
+              },
+              {
+                "type": "pattern",
+                "pattern": "__SFTPUSER__",
+                "inputType": "select",
+                "id": "sftpuser",
+                "label": "Transfer Family user",
+                "visible": true,
+                "search": "MetricName=\"TransferFamilyUserActivity\" OR (MetricName=\"PartnerNotInBreach\" PartnerName=\"All\")",
                 "populateFrom": "PartnerName",
                 "defaultValue": "All"
               }
@@ -342,11 +384,11 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Authentication"
+                  "markdown": "## Authentication (select a user, or All, from the Transfer Family user dropdown at the top)"
                 }
               },
               {
-                "type": "log",
+                "type": "metric",
                 "x": 0,
                 "y": 16,
                 "width": 8,
@@ -354,12 +396,31 @@ Resources:
                 "properties": {
                   "title": "Partner login failures",
                   "region": "${AWS::Region}",
-                  "view": "table",
-                  "query": "SOURCE '${TransferLogGroupName}' | filter @message like /AUTH_FAILURE/ | stats count(*) as partner_login_failures"
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__SFTPUSER__\"', 'Sum')",
+                        "id": "u1",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(u1)",
+                        "id": "u2",
+                        "label": "Login failures",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
                 }
               },
               {
-                "type": "log",
+                "type": "metric",
                 "x": 8,
                 "y": 16,
                 "width": 16,
@@ -367,8 +428,26 @@ Resources:
                 "properties": {
                   "title": "Partner login failures - by partner",
                   "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__SFTPUSER__\"', 'Sum')",
+                        "id": "b1",
+                        "label": "${!PROP('Dim.All')}"
+                      }
+                    ]
+                  ],
                   "view": "table",
-                  "query": "SOURCE '${TransferLogGroupName}' | fields @timestamp, user, `source-ip` | filter @message like /AUTH_FAILURE/ | stats count(*) as login_failures, max(@timestamp) as last_failure_ms, latest(`source-ip`) as source_ip by user | fields fromMillis(last_failure_ms) as last_failure_utc | sort login_failures desc | display user, login_failures, last_failure_utc, source_ip"
+                  "table": {
+                    "layout": "horizontal",
+                    "showTimeSeriesData": false,
+                    "summaryColumns": [
+                      "SUM"
+                    ]
+                  },
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
                 }
               },
               {
@@ -896,7 +975,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Database Health"
+                  "markdown": "## Database Health (select a partner, or All, from the Partner dropdown at the top)"
                 }
               },
               {
@@ -936,6 +1015,8 @@ Resources:
                       "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Create",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
@@ -945,21 +1026,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "Create",
-                      {
-                        "label": "Tables Generator Lambda",
-                        "color": "#ff7f0e"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
                       "${DatabaseProcessorFunctionName}",
                       "FailureType",
                       "Create",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
@@ -972,6 +1043,8 @@ Resources:
                       "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Create",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
@@ -984,6 +1057,8 @@ Resources:
                       "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Create",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
@@ -1019,6 +1094,8 @@ Resources:
                       "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Read",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
@@ -1028,21 +1105,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "Read",
-                      {
-                        "label": "Tables Generator Lambda",
-                        "color": "#ff7f0e"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
                       "${DatabaseProcessorFunctionName}",
                       "FailureType",
                       "Read",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
@@ -1055,6 +1122,8 @@ Resources:
                       "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Read",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
@@ -1067,6 +1136,8 @@ Resources:
                       "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Read",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
@@ -1102,6 +1173,8 @@ Resources:
                       "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Update",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
@@ -1111,21 +1184,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "Update",
-                      {
-                        "label": "Tables Generator Lambda",
-                        "color": "#ff7f0e"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
                       "${DatabaseProcessorFunctionName}",
                       "FailureType",
                       "Update",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
@@ -1138,6 +1201,8 @@ Resources:
                       "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Update",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
@@ -1150,6 +1215,8 @@ Resources:
                       "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Update",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
@@ -1185,6 +1252,8 @@ Resources:
                       "${ManifestMetadataFunctionName}",
                       "FailureType",
                       "Delete",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
@@ -1194,21 +1263,11 @@ Resources:
                       "HIE/OperationalMonitoring",
                       "CRUDFailureEvents",
                       "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "Delete",
-                      {
-                        "label": "Tables Generator Lambda",
-                        "color": "#ff7f0e"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
                       "${DatabaseProcessorFunctionName}",
                       "FailureType",
                       "Delete",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
@@ -1221,6 +1280,8 @@ Resources:
                       "${PayloadMonitoringFunctionName}",
                       "FailureType",
                       "Delete",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
@@ -1233,6 +1294,8 @@ Resources:
                       "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Delete",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
@@ -1242,9 +1305,41 @@ Resources:
                 }
               },
               {
-                "type": "text",
+                "type": "metric",
                 "x": 0,
                 "y": 56,
+                "width": 24,
+                "height": 6,
+                "properties": {
+                  "title": "Database processing errors - selected partner",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"Errors\" PartnerName=\"__PARTNER__\"', 'Sum')",
+                        "id": "s4",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(s4)",
+                        "id": "m4",
+                        "label": "Database processing errors",
+                        "color": "#d62728"
+                      }
+                    ]
+                  ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 62,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1254,7 +1349,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 57,
+                "y": 63,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1294,7 +1389,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 63,
+                "y": 69,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1334,7 +1429,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 69,
+                "y": 75,
                 "width": 24,
                 "height": 6,
                 "properties": {
