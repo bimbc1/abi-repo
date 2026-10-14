@@ -15,37 +15,6 @@ Resources:
   AdminRegistryBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub project-hi-analytics-admin-registry-bucket-${Env}
-      BucketEncryption:
-        ServerSideEncryptionConfiguration:
-          - ServerSideEncryptionByDefault:
-              SSEAlgorithm: AES256
-      PublicAccessBlockConfiguration:
-        BlockPublicAcls: true
-        BlockPublicPolicy: true
-        IgnorePublicAcls: true
-        RestrictPublicBuckets: true
-      VersioningConfiguration:
-        Status: Enabled
-      LoggingConfiguration:
-        DestinationBucketName: !Ref AdminRegistryLogBucket
-        LogFilePrefix: access-logs/
-      Tags:
-        - Key: tenant:CKID
-          Value: '2598'
-        - Key: tenant:VAECID
-          Value: AWG20251201001
-        - Key: va_vasi_id
-          Value: '2238'
-        - Key: Name
-          Value: !Sub project-hi-analytics-admin-registry-bucket-${Env}
-        - Key: Purpose
-          Value: admin-registry
-
-  # Enforce TLS on the registry bucket
-  AdminRegistryBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
       Bucket: !Ref AdminRegistryBucket
       PolicyDocument:
         Version: '2012-10-17'
@@ -60,15 +29,7 @@ Resources:
             Condition:
               Bool:
                 aws:SecureTransport: 'false'
-
-  # Access log bucket
-  AdminRegistryLogBucket:
-    Type: AWS::S3::Bucket
-    Properties:
-      BucketName: !Sub project-hi-analytics-admin-registry-logs-${Env}
-      OwnershipControls:
-        Rules:
-          - ObjectOwnership: BucketOwnerEnforced
+      BucketName: !Sub project-hi-analytics-admin-registry-bucket-${Env}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -78,11 +39,6 @@ Resources:
         BlockPublicPolicy: true
         IgnorePublicAcls: true
         RestrictPublicBuckets: true
-      LifecycleConfiguration:
-        Rules:
-          - Id: ExpireOldLogs
-            Status: Enabled
-            ExpirationInDays: 365
       Tags:
         - Key: tenant:CKID
           Value: '2598'
@@ -91,38 +47,9 @@ Resources:
         - Key: va_vasi_id
           Value: '2238'
         - Key: Name
-          Value: !Sub project-hi-analytics-admin-registry-logs-${Env}
+          Value: !Sub project-hi-analytics-admin-registry-bucket-${Env}
         - Key: Purpose
-          Value: admin-registry-access-logs
-
-  AdminRegistryLogBucketPolicy:
-    Type: AWS::S3::BucketPolicy
-    Properties:
-      Bucket: !Ref AdminRegistryLogBucket
-      PolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Sid: AllowS3AccessLogDelivery
-            Effect: Allow
-            Principal:
-              Service: logging.s3.amazonaws.com
-            Action: s3:PutObject
-            Resource: !Sub '${AdminRegistryLogBucket.Arn}/*'
-            Condition:
-              ArnLike:
-                aws:SourceArn: !Sub 'arn:${AWS::Partition}:s3:::project-hi-analytics-admin-registry-bucket-${Env}'
-              StringEquals:
-                aws:SourceAccount: !Ref AWS::AccountId
-          - Sid: DenyInsecureTransport
-            Effect: Deny
-            Principal: '*'
-            Action: 's3:*'
-            Resource:
-              - !GetAtt AdminRegistryLogBucket.Arn
-              - !Sub '${AdminRegistryLogBucket.Arn}/*'
-            Condition:
-              Bool:
-                aws:SecureTransport: 'false'
+          Value: admin-registry
 
 Outputs:
 
@@ -130,4 +57,4 @@ Outputs:
     Description: ARN for Admin Registry bucket
     Value: !GetAtt AdminRegistryBucket.Arn
     Export:
-      Name: !Sub project-hi-analytics-admin-registry-bucket-arn-${Env}
+      Name: !Sub project-hie-analytics-admin-registry-bucket-arn-${Env}
