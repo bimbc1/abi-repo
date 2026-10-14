@@ -43,4 +43,4 @@ Outputs:
     Description: ARN for Admin Registry bucket
     Value: !GetAtt AdminRegistryBucket.Arn
     Export:
-      Name: !Sub Admin-Registry-Bucket-Arn-${Env}
+      Name: !Sub project-hie-analytics-admin-registry-bucket-arn-${Env}
