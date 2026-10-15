@@ -297,7 +297,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Transfer family user",
+                  "title": "Transfer family user:Files in",
                   "region": "${AWS::Region}",
                   "view": "timeSeries",
                   "period": 1800,
@@ -324,61 +324,18 @@ Resources:
                         "label": "Received Files: ${!SUM}",
                         "color": "#1f77b4"
                       }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 3,
-                "width": 16,
-                "height": 6,
-                "properties": {
-                  "title": "FilesIn",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 1800,
-                  "liveData": true,
-                  "stat": "Sum",
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "showUnits": false
-                    }
-                  },
-                  "metrics": [
+                    ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "S3ObjectArrivals",
-                      "PartnerName",
-                      "__PARTNER__",
                       {
-                        "id": "e1",
-                        "stat": "Sum",
-                        "period": 1800,
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"RegisteredPartners\" PartnerName=\"__SFTPUSER__\"', 'Maximum', 1800)",
+                        "id": "tpartners",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "FILL(e1, 0)",
-                        "id": "files",
-                        "label": "Received Files: ${!SUM}",
-                        "color": "#1f77b4"
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"RegisteredPartners\" PartnerName=\"__PARTNER__\"', 'Maximum', 1800)",
-                        "id": "partners",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "IF(EPOCH(files) < MAX(EPOCH(files)), 6 * PERIOD(files) / 1800 * MAX(FILL(MAX(partners), 1)))",
-                        "id": "expected",
+                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), 6 * PERIOD(tfiles) / 1800 * MAX(MAX([tfiles * 0 + 1, tpartners])))",
+                        "id": "texpected",
                         "label": "Expected Files: ${!SUM}",
                         "color": "#7f7f7f"
                       }
