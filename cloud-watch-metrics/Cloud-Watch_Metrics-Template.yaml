@@ -237,7 +237,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## AWS Transfer Family"
+                  "markdown": "## AWS Transfer Family (select a partner, or All, from the Partner dropdown at the top)"
                 }
               },
               {
@@ -255,7 +255,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\" PartnerName=\"__PARTNER__\"', 'Sum', 300)",
                         "id": "e1",
                         "label": "FilesIn"
                       }
@@ -274,6 +274,7 @@ Resources:
                   "region": "${AWS::Region}",
                   "view": "timeSeries",
                   "period": 1800,
+                  "liveData": true,
                   "stat": "Sum",
                   "yAxis": {
                     "left": {
@@ -285,6 +286,8 @@ Resources:
                     [
                       "HIE/OperationalMonitoring",
                       "S3ObjectArrivals",
+                      "PartnerName",
+                      "__PARTNER__",
                       {
                         "id": "e1",
                         "stat": "Sum",
@@ -302,7 +305,14 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "files*0+6",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"RegisteredPartners\" PartnerName=\"__PARTNER__\"', 'Maximum', 1800)",
+                        "id": "partners",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(EPOCH(files) < MAX(EPOCH(files)), 6 * PERIOD(files) / 1800 * MAX(FILL(MAX(partners), 1)))",
                         "id": "expected",
                         "label": "Expected Files: ${!SUM}",
                         "color": "#7f7f7f"
@@ -1215,85 +1225,6 @@ Resources:
                       "${CCDAExtractionFunctionName}",
                       "FailureType",
                       "Update",
-                      "PartnerName",
-                      "__PARTNER__",
-                      {
-                        "label": "CCDA Extraction Lambda",
-                        "color": "#8c564b"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 18,
-                "y": 50,
-                "width": 6,
-                "height": 6,
-                "properties": {
-                  "title": "CRUD failures - Delete",
-                  "region": "${AWS::Region}",
-                  "view": "bar",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "showUnits": false
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "Delete",
-                      "PartnerName",
-                      "__PARTNER__",
-                      {
-                        "label": "Manifest Metadata Lambda",
-                        "color": "#1f77b4"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "Delete",
-                      "PartnerName",
-                      "__PARTNER__",
-                      {
-                        "label": "Database Processor Lambda",
-                        "color": "#2ca02c"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "Delete",
-                      "PartnerName",
-                      "__PARTNER__",
-                      {
-                        "label": "Payload Monitoring Lambda",
-                        "color": "#9467bd"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "Delete",
                       "PartnerName",
                       "__PARTNER__",
                       {
