@@ -115,15 +115,31 @@ Resources:
 
   # This Transfer Family server writes plain-text log lines, e.g.
   #   ERRORS AUTH_FAILURE Method=publickey User=Epic Message="..." SourceIP=...
-  # The transformer turns each line into fields (activity, user) so the two
-  # per-user metric filters below can read them.
+  #   Oracle.4f2ac91b2e9a6d35 CLOSE Path=/bucket/file.txt BytesIn=1553
+  # The transformer splits each line into stream, activity and the Key=Value
+  # pairs (User, BytesIn, ...). "tfuser" is the username taken from the
+  # stream (Oracle.<session-id> -> Oracle), used for uploads that have no User=.
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
     Properties:
       LogGroupIdentifier: !Ref TransferLogGroupName
       TransformerConfig:
         - Grok:
-            Match: '%{NOTSPACE:stream} %{NOTSPACE:activity} %{DATA}User=%{NOTSPACE:user}'
+            Match: '%{NOTSPACE:stream} %{NOTSPACE:activity} %{GREEDYDATA:details}'
+        - ParseKeyValue:
+            Source: details
+            FieldDelimiter: ' '
+            KeyValueDelimiter: '='
+            NonMatchValue: 'none'
+        - CopyValue:
+            Entries:
+              - Source: stream
+                Target: tfuser
+        - SubstituteString:
+            Entries:
+              - Source: tfuser
+                From: '^(.+)\.[0-9A-Za-z]+$'
+                To: '$1'
 
   # Per-user activity; fills the "Transfer Family user" dropdown (with the
   # "All" entry the Manifest Lambda publishes under PartnerName).
@@ -133,7 +149,7 @@ Resources:
     Properties:
       LogGroupName: !Ref TransferLogGroupName
       ApplyOnTransformedLogs: true
-      FilterPattern: '{ $.user = "*" }'
+      FilterPattern: '{ $.User = "*" }'
       MetricTransformations:
         - MetricNamespace: HIE/OperationalMonitoring
           MetricName: TransferFamilyUserActivity
@@ -141,7 +157,7 @@ Resources:
           Unit: Count
           Dimensions:
             - Key: PartnerName
-              Value: $.user
+              Value: $.User
 
   # Login failures per user (dimension "All" so "All" matches every user).
   LoginFailuresByUserMetricFilter:
@@ -158,7 +174,25 @@ Resources:
           Unit: Count
           Dimensions:
             - Key: All
-              Value: $.user
+              Value: $.User
+
+  # Counts each file uploaded through Transfer Family per user (CLOSE line
+  # with BytesIn=). Dimension "All" so the dropdown value "All" matches everyone.
+  TransferFamilyFilesInMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: TransferLogTransformer
+    Properties:
+      LogGroupName: !Ref TransferLogGroupName
+      ApplyOnTransformedLogs: true
+      FilterPattern: '{ ($.activity = "CLOSE") && ($.BytesIn = "*") }'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: TransferFamilyFilesIn
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: All
+              Value: $.tfuser
 
   UploadFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -266,14 +300,29 @@ Resources:
                   "title": "Transfer family",
                   "region": "${AWS::Region}",
                   "view": "timeSeries",
-                  "period": 300,
+                  "period": 1800,
+                  "liveData": true,
                   "stat": "Sum",
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "showUnits": false
+                    }
+                  },
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"FilesIn\" PartnerName=\"__PARTNER__\"', 'Sum', 300)",
-                        "id": "e1",
-                        "label": "FilesIn"
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"TransferFamilyFilesIn\" \"__SFTPUSER__\"', 'Sum', 1800)",
+                        "id": "tu",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "FILL(SUM(tu), 0)",
+                        "id": "tfiles",
+                        "label": "Received Files: ${!SUM}",
+                        "color": "#1f77b4"
                       }
                     ]
                   ]
