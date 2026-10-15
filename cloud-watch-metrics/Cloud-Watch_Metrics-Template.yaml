@@ -297,7 +297,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Transfer family",
+                  "title": "Transfer family user",
                   "region": "${AWS::Region}",
                   "view": "timeSeries",
                   "period": 1800,
@@ -422,31 +422,6 @@ Resources:
                       {
                         "label": "Upload failures",
                         "color": "#d13212"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 9,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "File processing failures",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "FileProcessingFailures",
-                      {
-                        "label": "File processing failures",
-                        "color": "#ff7f0e"
                       }
                     ]
                   ]
