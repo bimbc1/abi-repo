@@ -517,6 +517,46 @@ def get_partner_name(cur, partner_id):
     )
     row = cur.fetchone()
     return row[0] if row else f"Partner {partner_id}"
+    # ---PARTNER NAME FOR A BUCKET (cached; used for per-partner file arrival metrics)---
+_bucket_partner_names = {}
+def get_partner_name_for_bucket(bucket):
+    if bucket in _bucket_partner_names:
+        return _bucket_partner_names[bucket]
+    conn = None
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            partner_id, _, _ = get_partner_info(cur, bucket)
+            partner_name = get_partner_name(cur, partner_id)
+        _bucket_partner_names[bucket] = partner_name
+        return partner_name
+    except Exception as e:
+        logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
+        return None
+    finally:
+        if conn:
+            conn.close()
+    # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
+_registered_partner_count = {"value": None, "at": None}
+def get_registered_partner_count():
+    now = datetime.now(timezone.utc)
+    cached_at = _registered_partner_count["at"]
+    if cached_at and (now - cached_at).total_seconds() < 900:
+        return _registered_partner_count["value"]
+    conn = None
+    try:
+        conn = get_conn()
+        with conn.cursor() as cur:
+            execute_crud(cur, "SELECT COUNT(*) FROM partner_registry")
+            row = cur.fetchone()
+        _registered_partner_count["value"] = row[0] if row else None
+        _registered_partner_count["at"] = now
+    except Exception as e:
+        logger.warning("Could not count registered partners: %s", e)
+    finally:
+        if conn:
+            conn.close()
+    return _registered_partner_count["value"]
     # --- PARTNER TRANSMISSION STATE TRACKING ---
 def update_partner_state(cur, partner_id, object_key, partner_name=None):
     now = datetime.now(timezone.utc)
@@ -1216,13 +1256,15 @@ def send_metadata_to_sqs(message):
             dimensions=[{"Name": "PartnerName", "Value": partner_name}]
         )
         if message["message_type"] == "PATIENT_REPORT_METADATA_UPSERT":
-            put_metric(
-                namespace="HIE/PartnerMonitoring",
-                metric_name="FilesOut" if message.get("direction") == "outbound" else "FilesIn",
-                value=message["metrics"].get("files_in", 0),
-                unit="Count",
-                dimensions=[{"Name": "PartnerName", "Value": partner_name}]
-            )
+            # ---FILES IN/OUT PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
+            for _pname in (partner_name, "All"):
+                put_metric(
+                    namespace="HIE/PartnerMonitoring",
+                    metric_name="FilesOut" if message.get("direction") == "outbound" else "FilesIn",
+                    value=message["metrics"].get("files_in", 0),
+                    unit="Count",
+                    dimensions=[{"Name": "PartnerName", "Value": _pname}]
+                )
     return response
     # ---CLOUDWATCH METRICS---
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
@@ -1280,6 +1322,25 @@ def process_object(bucket, key, record):
         metric_name="S3ObjectArrivals",
         value=1
     )
+    # ---S3 OBJECT ARRIVALS PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
+    arrival_partner_name = get_partner_name_for_bucket(bucket)
+    for _pname in ([arrival_partner_name, "All"] if arrival_partner_name else ["All"]):
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="S3ObjectArrivals",
+            value=1,
+            dimensions=[{"Name": "PartnerName", "Value": _pname}]
+        )
+    # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
+    registered_partner_count = get_registered_partner_count()
+    for _pname, _value in ((arrival_partner_name, 1), ("All", registered_partner_count)):
+        if _pname and _value:
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name="RegisteredPartners",
+                value=_value,
+                dimensions=[{"Name": "PartnerName", "Value": _pname}]
+            )
     if not is_target_file(filename):
         logger.info("Skipping non-target file: %s", filename)
         return {"processed": False, "reason": "NON_TARGET_FILE"}
