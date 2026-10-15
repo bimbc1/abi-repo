@@ -113,12 +113,26 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
+  # This Transfer Family server writes plain-text log lines, e.g.
+  #   ERRORS AUTH_FAILURE Method=publickey User=Epic Message="..." SourceIP=...
+  # The transformer turns each line into fields (activity, user) so the two
+  # per-user metric filters below can read them.
+  TransferLogTransformer:
+    Type: AWS::Logs::Transformer
+    Properties:
+      LogGroupIdentifier: !Ref TransferLogGroupName
+      TransformerConfig:
+        - Grok:
+            Match: '%{NOTSPACE:stream} %{NOTSPACE:activity} %{DATA}User=%{NOTSPACE:user}'
+
   # Per-user activity; fills the "Transfer Family user" dropdown (with the
   # "All" entry the Manifest Lambda publishes under PartnerName).
   TransferFamilyUsersMetricFilter:
     Type: AWS::Logs::MetricFilter
+    DependsOn: TransferLogTransformer
     Properties:
       LogGroupName: !Ref TransferLogGroupName
+      ApplyOnTransformedLogs: true
       FilterPattern: '{ $.user = "*" }'
       MetricTransformations:
         - MetricNamespace: HIE/OperationalMonitoring
@@ -132,9 +146,11 @@ Resources:
   # Login failures per user (dimension "All" so "All" matches every user).
   LoginFailuresByUserMetricFilter:
     Type: AWS::Logs::MetricFilter
+    DependsOn: TransferLogTransformer
     Properties:
       LogGroupName: !Ref TransferLogGroupName
-      FilterPattern: '{ $.activity-type = "AUTH_FAILURE" }'
+      ApplyOnTransformedLogs: true
+      FilterPattern: '{ $.activity = "AUTH_FAILURE" }'
       MetricTransformations:
         - MetricNamespace: HIE/OperationalMonitoring
           MetricName: LoginFailuresByUser
