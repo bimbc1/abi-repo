@@ -217,8 +217,6 @@ def ensure_tables(cur):
         ADD COLUMN IF NOT EXISTS receiving_organization_id VARCHAR(64);
         ALTER TABLE patient_details
         ADD COLUMN IF NOT EXISTS commonwell_indicator BOOLEAN;
-        ALTER TABLE partner_schedule
-        ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
     """)
         # ---ENSURING THE CHECK CONSTRAINT ON SSN IS PRESENT---
     cur.execute("""
@@ -311,7 +309,7 @@ def ensure_tables(cur):
         ALTER TABLE manifest_batch
         ADD CONSTRAINT unique_batch UNIQUE (file_name);
     """)
-        # ---CREATING PARTNER_SCHEDULE TABLE---
+    # ---CREATING PARTNER_SCHEDULE TABLE---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS partner_schedule (
             schedule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -328,11 +326,15 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+    # ---ADDING EXPECTED_FILES_PER_TRANSMISSION TO EXISTING PARTNER_SCHEDULE TABLES---
+    # New tables already get this column from the CREATE above. This ALTER is
+    # only for environments where partner_schedule existed before the column
+    # was added; on a newly created table it does nothing.
     cur.execute("""
         ALTER TABLE partner_schedule
-        ADD COLUMN IF NOT EXISTS expected_files_transmission INTEGER DEFAULT 6;
+        ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
     """)
-        # ---DROPPING TIMEZONE COLUMN FROM PARTNER_SCHEDULE TABLE IF IT EXISTS---
+    # ---DROPPING TIMEZONE COLUMN FROM PARTNER_SCHEDULE TABLE IF IT EXISTS---
     cur.execute("""
         ALTER TABLE partner_schedule
         DROP COLUMN IF EXISTS timezone;
