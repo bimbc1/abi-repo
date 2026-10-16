@@ -339,18 +339,26 @@ Resources:
                         "label": "Expected Files: ${!SUM}",
                         "color": "#7f7f7f"
                       }
+                    ],
+                    [
+                      {
+                        "expression": "MAX([texpected - tfiles, texpected * 0])",
+                        "id": "tbelow",
+                        "label": "Below Expected: ${!SUM}",
+                        "color": "#d13212"
+                      }
                     ]
                   ],
                   "annotations": {
                     "horizontal": [
                       {
-                        "label": "Below expected",
+                        "label": "\u200b",
                         "value": 6,
                         "fill": "below",
                         "color": "#d13212"
                       },
                       {
-                        "label": "Expected met",
+                        "label": "\u200b",
                         "value": 6,
                         "fill": "above",
                         "color": "#2ca02c"
