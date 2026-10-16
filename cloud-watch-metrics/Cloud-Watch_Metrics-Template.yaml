@@ -297,111 +297,6 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Transfer family user:Files in",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "stat": "Sum",
-                  "period": 1800,
-                  "liveData": true,
-                  "sparkline": false,
-                  "metrics": [
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"TransferFamilyFilesIn\" \"__SFTPUSER__\"', 'Sum', 1800)",
-                        "id": "tu",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "FILL(SUM(tu), 0)",
-                        "id": "tfiles",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyUserActivity\"', 'Sum', 1800)",
-                        "id": "tua",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyUserActivity\" PartnerName=\"__SFTPUSER__\"', 'Sum', 1800)",
-                        "id": "tsel",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SUM([tfiles * 0, FILL(tua, 0) * 0 + 1])",
-                        "id": "tusers",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "MAX([tfiles * 0, FILL(tsel, 0) * 0 + 1])",
-                        "id": "tone",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), 6 * PERIOD(tfiles) / 1800 * (MAX(tone) + (1 - MAX(tone)) * MAX(MAX([tusers, tfiles * 0 + 1]))))",
-                        "id": "texpected",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "tfiles * 0 + MAX(RUNNING_SUM(tfiles))",
-                        "id": "totrecv",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "tfiles * 0 + MAX(RUNNING_SUM(texpected))",
-                        "id": "totexp",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "totexp + 0",
-                        "id": "texpshow",
-                        "label": "Expected",
-                        "color": "#7f7f7f"
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "totrecv + 0",
-                        "id": "trecvshow",
-                        "label": "Received",
-                        "color": "#2ca02c"
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "MAX([totexp - totrecv, tfiles * 0])",
-                        "id": "tbelow",
-                        "label": "Shortfall",
-                        "color": "#d13212"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 3,
-                "width": 8,
-                "height": 6,
-                "properties": {
                   "title": "Transfer family user:Files in - Completion (%)",
                   "region": "${AWS::Region}",
                   "view": "pie",
@@ -476,24 +371,25 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "MIN([100 * totrecv / MAX([totexp, tfiles * 0 + 1]), tfiles * 0 + 100])",
-                        "id": "tpct",
-                        "visible": false
+                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), totexp, 0)",
+                        "id": "pt",
+                        "label": "Total Expected Files: ${!MAX}",
+                        "color": "#7f7f7f"
                       }
                     ],
                     [
                       {
-                        "expression": "tpct + 0",
-                        "id": "tpctrecv",
-                        "label": "Received (%)",
+                        "expression": "totrecv + 0",
+                        "id": "pr",
+                        "label": "Received (${!LAST})",
                         "color": "#2ca02c"
                       }
                     ],
                     [
                       {
-                        "expression": "100 - tpct",
-                        "id": "tpctshort",
-                        "label": "Shortfall (%)",
+                        "expression": "MAX([totexp - totrecv, tfiles * 0])",
+                        "id": "ps",
+                        "label": "Shortfall (${!LAST})",
                         "color": "#d13212"
                       }
                     ]
