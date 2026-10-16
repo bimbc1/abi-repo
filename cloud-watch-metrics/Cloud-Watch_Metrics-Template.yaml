@@ -297,14 +297,13 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Transfer family user:Files in - Completion (%)",
+                  "title": "Transfer family user:Files in",
                   "region": "${AWS::Region}",
-                  "view": "pie",
+                  "view": "singleValue",
+                  "stat": "Sum",
                   "period": 1800,
                   "liveData": true,
-                  "labels": {
-                    "visible": true
-                  },
+                  "sparkline": false,
                   "metrics": [
                     [
                       {
@@ -371,9 +370,9 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), totexp, 0)",
+                        "expression": "totexp + 0",
                         "id": "pt",
-                        "label": "Total Expected Files: ${!MAX}",
+                        "label": "Expected",
                         "color": "#7f7f7f"
                       }
                     ],
@@ -381,7 +380,7 @@ Resources:
                       {
                         "expression": "totrecv + 0",
                         "id": "pr",
-                        "label": "Received (${!LAST})",
+                        "label": "Received",
                         "color": "#2ca02c"
                       }
                     ],
@@ -389,7 +388,7 @@ Resources:
                       {
                         "expression": "MAX([totexp - totrecv, tfiles * 0])",
                         "id": "ps",
-                        "label": "Shortfall (${!LAST})",
+                        "label": "Shortfall",
                         "color": "#d13212"
                       }
                     ]
