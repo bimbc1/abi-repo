@@ -254,7 +254,10 @@ def ensure_tables(cur):
         ALTER TABLE partner_schedule
         DROP COLUMN IF EXISTS timezone;
     """)
-        # ---ADDING EXPECTED_FILES_PER_TRANSMISSION COLUMN TO PARTNER_SCHEDULE TABLE IF IT DOES NOT EXIST---
+    # ---ADDING EXPECTED_FILES_PER_TRANSMISSION TO EXISTING PARTNER_SCHEDULE TABLES---
+    # New tables already get this column from the CREATE above. This ALTER is
+    # only for environments where partner_schedule existed before the column
+    # was added; on a newly created table it does nothing.
     cur.execute("""
         ALTER TABLE partner_schedule
         ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
