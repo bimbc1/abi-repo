@@ -9,13 +9,18 @@ Parameters:
       - stg
       - prod
 
+  ProjectName:
+    Type: String
+    Default: project-hie-analytics
+    Description: Prefix used for every resource and export name in this stack
+
 Resources:
 
   # Admin Registry Bucket
   AdminRegistryBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub project-hi-analytics-admin-registry-bucket-${Env}
+      BucketName: !Sub ${ProjectName}-admin-registry-bucket-${Env}
       BucketEncryption:
         ServerSideEncryptionConfiguration:
           - ServerSideEncryptionByDefault:
@@ -38,7 +43,7 @@ Resources:
         - Key: va_vasi_id
           Value: '2238'
         - Key: Name
-          Value: !Sub project-hi-analytics-admin-registry-bucket-${Env}
+          Value: !Sub ${ProjectName}-admin-registry-bucket-${Env}
         - Key: Purpose
           Value: admin-registry
 
@@ -65,7 +70,7 @@ Resources:
   AdminRegistryLogBucket:
     Type: AWS::S3::Bucket
     Properties:
-      BucketName: !Sub project-hi-analytics-admin-registry-logs-${Env}
+      BucketName: !Sub ${ProjectName}-admin-registry-logs-${Env}
       OwnershipControls:
         Rules:
           - ObjectOwnership: BucketOwnerEnforced
@@ -91,7 +96,7 @@ Resources:
         - Key: va_vasi_id
           Value: '2238'
         - Key: Name
-          Value: !Sub project-hi-analytics-admin-registry-logs-${Env}
+          Value: !Sub ${ProjectName}-admin-registry-logs-${Env}
         - Key: Purpose
           Value: admin-registry-access-logs
 
@@ -110,7 +115,8 @@ Resources:
             Resource: !Sub '${AdminRegistryLogBucket.Arn}/*'
             Condition:
               ArnLike:
-                aws:SourceArn: !Sub 'arn:${AWS::Partition}:s3:::project-hi-analytics-admin-registry-bucket-${Env}'
+                # Reference the real bucket instead of retyping its name
+                aws:SourceArn: !GetAtt AdminRegistryBucket.Arn
               StringEquals:
                 aws:SourceAccount: !Ref AWS::AccountId
           - Sid: DenyInsecureTransport
@@ -130,4 +136,4 @@ Outputs:
     Description: ARN for Admin Registry bucket
     Value: !GetAtt AdminRegistryBucket.Arn
     Export:
-      Name: !Sub project-hie-analytics-admin-registry-bucket-arn-${Env}
+      Name: !Sub ${ProjectName}-admin-registry-bucket-arn-${Env}
