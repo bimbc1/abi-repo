@@ -97,12 +97,50 @@ def ensure_tables(cur):
             updated_at TIMESTAMPTZ DEFAULT NOW()
         );
     """)
+    # ---ENSURING PARTNER_NAME EXISTS AND IS FILLED ON EXISTING TABLES---
+    # Older partner_registry tables may lack partner_name, or have rows with a
+    # NULL or empty name. Those rows get a searchable placeholder
+    # ('UNKNOWN-<partner_id>') instead of '', so they are easy to find and fix.
+    # There is deliberately no default: a new partner must be inserted with
+    # its real name, and an insert without one should fail.
     cur.execute("""
         ALTER TABLE partner_registry
         ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100);
-        UPDATE partner_registry SET partner_name = '' WHERE partner_name IS NULL;
-        ALTER TABLE partner_registry ALTER COLUMN partner_name SET NOT NULL;
+        UPDATE partner_registry
+        SET partner_name = 'UNKNOWN-' || partner_id::text
+        WHERE partner_name IS NULL OR btrim(partner_name) = '';
+        ALTER TABLE partner_registry
+        ALTER COLUMN partner_name SET NOT NULL;
     """)
+    # ---BLOCKING EMPTY PARTNER NAMES---
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'partner_name_not_blank'
+                  AND conrelid = 'partner_registry'::regclass
+            ) THEN
+                ALTER TABLE partner_registry
+                ADD CONSTRAINT partner_name_not_blank
+                CHECK (btrim(partner_name) <> '');
+            END IF;
+        END
+        $$;
+    """)
+    # ---FLAGGING PARTNERS THAT STILL NEED A REAL NAME---
+    cur.execute("""
+        SELECT COUNT(*) FROM partner_registry
+        WHERE partner_name LIKE 'UNKNOWN-%';
+    """)
+    placeholder_count = cur.fetchone()[0]
+    if placeholder_count:
+        logger.warning(
+            "%d partner_registry row(s) still have a placeholder partner_name "
+            "('UNKNOWN-<partner_id>') and need their real name set.",
+            placeholder_count,
+        )
         # ---CREATING PARTNER_CONTACT_DETAILS TABLE---
     cur.execute("""
         CREATE TABLE IF NOT EXISTS partner_contact_details (
