@@ -149,15 +149,15 @@ Resources:
     Properties:
       LogGroupName: !Ref TransferLogGroupName
       ApplyOnTransformedLogs: true
-      FilterPattern: '{ $.User = "*" }'
+      FilterPattern: '{ ($.activity = "CONNECTED") && ($.tfuser = "*") }'
       MetricTransformations:
         - MetricNamespace: HIE/OperationalMonitoring
-          MetricName: TransferFamilyUserActivity
+          MetricName: TransferFamilyConnectedUsers
           MetricValue: '1'
           Unit: Count
           Dimensions:
             - Key: PartnerName
-              Value: $.User
+              Value: $.tfuser
 
   # Login failures per user (dimension "All" so "All" matches every user).
   LoginFailuresByUserMetricFilter:
@@ -254,7 +254,7 @@ Resources:
                 "id": "sftpuser",
                 "label": "Transfer Family user",
                 "visible": true,
-                "search": "MetricName=\"TransferFamilyUserActivity\" OR (MetricName=\"PartnerNotInBreach\" PartnerName=\"All\")",
+                "search": "MetricName=\"TransferFamilyConnectedUsers\" OR (MetricName=\"PartnerNotInBreach\" PartnerName=\"All\")",
                 "populateFrom": "PartnerName",
                 "defaultValue": "All"
               }
@@ -321,14 +321,14 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyUserActivity\"', 'Sum', 1800)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyConnectedUsers\"', 'Sum', 1800)",
                         "id": "tua",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyUserActivity\" PartnerName=\"__SFTPUSER__\"', 'Sum', 1800)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyConnectedUsers\" PartnerName=\"__SFTPUSER__\"', 'Sum', 1800)",
                         "id": "tsel",
                         "visible": false
                       }
