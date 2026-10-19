@@ -536,495 +536,13 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Workflow Health"
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Retries by failure type - Manifest Metadata Lambda",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "DatabaseConnectionFailure",
-                      {
-                        "label": "Database connection",
-                        "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Retries by failure type - Tables Generator Lambda",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "DatabaseConnectionFailure",
-                      {
-                        "label": "Database connection",
-                        "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Retries by failure type - Database Processor Lambda",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "DatabaseConnectionFailure",
-                      {
-                        "label": "Database connection",
-                        "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Retries by failure type - New Function",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "DatabaseConnectionFailure",
-                      {
-                        "label": "Database connection",
-                        "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Retries by failure type - Monitoring Lambda",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "DatabaseConnectionFailure",
-                      {
-                        "label": "Database connection",
-                        "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
-                    ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
-                }
-              },
-              {
-                "type": "metric",
-                "x": 16,
-                "y": 30,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Database Processor DLQ Messages",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Maximum",
-                  "metrics": [
-                    [
-                      "AWS/SQS",
-                      "ApproximateNumberOfMessagesVisibletqueuedepth",
-                      "QueueName",
-                      "project-hie-analytics-database-processor-queue-arn-${Env}"
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "text",
-                "x": 0,
-                "y": 36,
-                "width": 24,
-                "height": 1,
-                "properties": {
-                  "markdown": "## Lambda Health"
-                }
-              },
-              {
-                "type": "text",
-                "x": 0,
-                "y": 37,
-                "width": 24,
-                "height": 3,
-                "properties": {
-                  "markdown": "Open the CloudWatch metrics (invocations, errors, throttles, concurrent executions, duration) for each Lambda function:\n\n${LambdaHealthButtons}"
-                }
-              },
-              {
-                "type": "text",
-                "x": 0,
-                "y": 40,
-                "width": 24,
-                "height": 1,
-                "properties": {
-                  "markdown": "## Storage & Processing"
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 41,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Storage & Processing",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Sum",
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "S3ObjectArrivals",
-                      {
-                        "label": "S3ObjectArrivals"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 8,
-                "y": 41,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Processing Delays",
-                  "region": "${AWS::Region}",
-                  "view": "timeSeries",
-                  "period": 300,
-                  "stat": "Average",
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "ProcessingDelaySeconds",
-                      {
-                        "label": "Average delay",
-                        "stat": "Average"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "ProcessingDelaySeconds",
-                      {
-                        "label": "Maximum delay",
-                        "stat": "Maximum"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "metric",
-                "x": 16,
-                "y": 41,
-                "width": 6,
-                "height": 6,
-                "properties": {
-                  "title": "ProcessingDelaySeconds",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Average",
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "ProcessingDelaySeconds"
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "text",
-                "x": 0,
-                "y": 47,
-                "width": 24,
-                "height": 1,
-                "properties": {
                   "markdown": "## Database Health (select a partner, or All, from the Partner dropdown at the top)"
                 }
               },
               {
                 "type": "text",
                 "x": 0,
-                "y": 48,
+                "y": 30,
                 "width": 24,
                 "height": 2,
                 "properties": {
@@ -1034,7 +552,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 50,
+                "y": 32,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -1113,7 +631,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 6,
-                "y": 50,
+                "y": 32,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -1192,7 +710,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 50,
+                "y": 32,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -1269,41 +787,422 @@ Resources:
                 }
               },
               {
+                "type": "text",
+                "x": 0,
+                "y": 38,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Workflow Health"
+                }
+              },
+              {
                 "type": "metric",
                 "x": 0,
-                "y": 56,
-                "width": 24,
+                "y": 39,
+                "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Database processing errors - selected partner",
+                  "title": "Retries by failure type - Manifest Metadata Lambda",
                   "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
                   "metrics": [
                     [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerName} MetricName=\"Errors\" PartnerName=\"__PARTNER__\"', 'Sum')",
-                        "id": "s4",
-                        "visible": false
+                        "label": "Database connection",
+                        "color": "#d13212"
                       }
                     ],
                     [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
                       {
-                        "expression": "SUM(s4)",
-                        "id": "m4",
-                        "label": "Database processing errors",
-                        "color": "#d62728"
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
                       }
                     ]
                   ],
-                  "view": "singleValue",
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 39,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Retries by failure type - Database Processor Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
                   "stat": "Sum",
                   "period": 300,
-                  "setPeriodToTimeRange": true
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 39,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Retries by failure type - New Function",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${CCDAExtractionFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${CCDAExtractionFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 39,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Retries by failure type - Monitoring Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${PayloadMonitoringFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${PayloadMonitoringFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 39,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Database Processor DLQ Messages",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Maximum",
+                  "metrics": [
+                    [
+                      "AWS/SQS",
+                      "ApproximateNumberOfMessagesVisibletqueuedepth",
+                      "QueueName",
+                      "project-hie-analytics-database-processor-queue-arn-${Env}"
+                    ]
+                  ]
                 }
               },
               {
                 "type": "text",
                 "x": 0,
-                "y": 62,
+                "y": 45,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Lambda Health"
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 46,
+                "width": 24,
+                "height": 3,
+                "properties": {
+                  "markdown": "Open the CloudWatch metrics (invocations, errors, throttles, concurrent executions, duration) for each Lambda function:\n\n${LambdaHealthButtons}"
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 49,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Storage & Processing"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 50,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Storage & Processing",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "S3ObjectArrivals",
+                      {
+                        "label": "S3ObjectArrivals"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 50,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Processing Delays",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Average",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds",
+                      {
+                        "label": "Average delay",
+                        "stat": "Average"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds",
+                      {
+                        "label": "Maximum delay",
+                        "stat": "Maximum"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 50,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "ProcessingDelaySeconds",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Average",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 56,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1313,7 +1212,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 63,
+                "y": 57,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1353,7 +1252,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 69,
+                "y": 63,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1393,7 +1292,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 75,
+                "y": 69,
                 "width": 24,
                 "height": 6,
                 "properties": {
