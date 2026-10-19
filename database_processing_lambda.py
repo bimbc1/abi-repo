@@ -60,6 +60,64 @@ def publish_partner_metric(partner_name, metric_name, value):
         ]
     )
 
+# ---- DASHBOARD METRICS ----
+# Metrics the operational dashboard and alarms read. Publishing is wrapped so
+# a CloudWatch error can never fail message processing.
+FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+
+
+def put_dashboard_metric(metric_name, value=1, unit="Count", dimensions=None,
+                         namespace="HIE/OperationalMonitoring"):
+    try:
+        metric = {"MetricName": metric_name, "Value": value, "Unit": unit}
+        if dimensions:
+            metric["Dimensions"] = dimensions
+        cloudwatch.put_metric_data(Namespace=namespace, MetricData=[metric])
+    except Exception as metric_error:
+        logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
+
+
+def put_crud_failure_metrics(failure_type, partner_name):
+    """CRUDFailureEvents per FunctionName + FailureType, also per partner and
+    as "All" so the dashboard Partner dropdown can show them."""
+    dimensions = [
+        {"Name": "FunctionName", "Value": FUNCTION_NAME},
+        {"Name": "FailureType", "Value": failure_type},
+    ]
+    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
+    for pname in ([partner_name, "All"] if partner_name and partner_name != "All" else ["All"]):
+        put_dashboard_metric(
+            "CRUDFailureEvents",
+            dimensions=dimensions + [{"Name": "PartnerName", "Value": pname}],
+        )
+
+
+# ---- CRUD OPERATION TRACKING ----
+# Records which kind of SQL statement (Create / Read / Update / Delete) ran
+# last, so a database error can be reported against that operation.
+_last_crud_operation = None
+_last_failure_type = None
+
+
+def track_crud(operation):
+    global _last_crud_operation
+    _last_crud_operation = operation
+
+
+def classify_failure(e):
+    global _last_failure_type
+    if isinstance(e, pg8000.Error) and _last_crud_operation:
+        _last_failure_type = _last_crud_operation
+    else:
+        _last_failure_type = "OtherFailure"
+
+
+def reset_failure_tracking():
+    global _last_crud_operation, _last_failure_type
+    _last_crud_operation = None
+    _last_failure_type = None
+
+
 # ---- DB CONNECTION WITH RETRY ----
 def get_conn():
     secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
@@ -77,6 +135,13 @@ def get_conn():
             )
         except Exception as e:
             put_metric("LambdaRetries")
+            put_dashboard_metric(
+                "RetryEvents",
+                dimensions=[
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+                ],
+            )
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
 
@@ -90,6 +155,10 @@ def get_conn():
     except Exception as e:
         put_metric("DBConnectionFailure")
         logger.error("DB connection failed after all retries: %s", str(e))
+        put_dashboard_metric("DatabaseConnectionFailures")
+        if "password authentication failed" in str(e).lower():
+            put_dashboard_metric("LoginFailures")
+        put_crud_failure_metrics("DatabaseConnectionFailure", None)
         raise Exception("Failed to connect to PostgreSQL after all retries")
 
 
@@ -105,6 +174,7 @@ def process_message(message):
                 upsert_manifest_metadata(message)
             except Exception as e:
                 put_metric("LambdaRetries")
+                classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
                 conn.rollback()
                 raise
@@ -126,6 +196,7 @@ def process_message(message):
                 upsert_patient_report_metadata(message)
             except Exception as e:
                 put_metric("LambdaRetries")
+                classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
                 conn.rollback()
                 raise
@@ -173,6 +244,7 @@ def upsert_manifest_metadata(message):
     cur = conn.cursor()
 
     # ---- CHECK IF manifest_batch ROW EXISTS ----
+    track_crud("Read")
     cur.execute(
         """
         SELECT COUNT(*) FROM manifest_batch
@@ -187,7 +259,9 @@ def upsert_manifest_metadata(message):
     if row[0] > 0:
         logger.info("manifest_batch row already exists for batch_id=%s file_name=%s skipping",
                     batch_id, file_name)
+        put_dashboard_metric("DuplicateBatchSkipped")
     else:
+        track_crud("Create")
         cur.execute(
             """
             INSERT INTO manifest_batch (
@@ -216,6 +290,7 @@ def upsert_manifest_metadata(message):
                 continue
 
             # ---- CHECK IF patient_details ROW EXISTS ----
+            track_crud("Read")
             cur.execute(
                 """
                 SELECT COUNT(*) FROM patient_details
@@ -233,6 +308,7 @@ def upsert_manifest_metadata(message):
                 logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                             partner_id, batch_id, edipi_value, file_name)
             else:
+                track_crud("Create")
                 cur.execute(
                     """
                     INSERT INTO patient_details (
@@ -280,6 +356,9 @@ def upsert_manifest_metadata(message):
     conn.commit()
     logger.info("Processed manifest_batch for batch_id=%s", batch_id)
 
+    if discrepancy:
+        put_dashboard_metric("CountMismatchEvents")
+
 
 # ---- DB FUNCTION: UPSERT PATIENT REPORT METADATA ----
 def upsert_patient_report_metadata(message):
@@ -316,6 +395,7 @@ def upsert_patient_report_metadata(message):
             continue
 
         # ---- CHECK IF patient_details ROW EXISTS ----
+        track_crud("Read")
         cur.execute(
             """
             SELECT COUNT(*) FROM patient_details
@@ -333,6 +413,7 @@ def upsert_patient_report_metadata(message):
             logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                         partner_id, batch_id, edipi_value, file_name)
         else:
+            track_crud("Create")
             cur.execute(
                 """
                 INSERT INTO patient_details (
@@ -375,6 +456,7 @@ def upsert_patient_report_metadata(message):
     conn.commit()
     logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
                 batch_id, inserted, skipped)
+    put_dashboard_metric("ArchiveStatus")
 
 
 # ---- LAMBDA HANDLER ----
@@ -406,6 +488,9 @@ def lambda_handler(event, context):
                             message.get("source", {}).get("batch_id"),
                             message.get("patient_received_report", {}).get("row_count"))
 
+                reset_failure_tracking()
+                processing_start = datetime.now(timezone.utc)
+
                 process_message(message)
 
                 partner_name = (
@@ -424,6 +509,26 @@ def lambda_handler(event, context):
                         "Failed to publish ProcessingSuccess metric: %s",
                         str(metric_error)
                 )
+
+                put_dashboard_metric(
+                    "ProcessingDelays",
+                    value=(datetime.now(timezone.utc) - processing_start).total_seconds(),
+                    unit="Seconds",
+                )
+                put_dashboard_metric(
+                    "BytesIn",
+                    value=(message.get("metrics") or {}).get("bytes_in", 0) or 0,
+                    unit="Bytes",
+                    dimensions=[{"Name": "PartnerName", "Value": partner_name}],
+                    namespace="HIE/PartnerMonitoring",
+                )
+                if message.get("message_type") == "PATIENT_REPORT_METADATA_UPSERT":
+                    put_dashboard_metric(
+                        "FilesIn",
+                        value=(message.get("counts") or {}).get("report_actual_count", 0) or 0,
+                        dimensions=[{"Name": "PartnerName", "Value": partner_name}],
+                        namespace="HIE/PartnerMonitoring",
+                    )
                 logger.info("Processed message ID: %s", message_id)
 
             except Exception as e:
@@ -452,6 +557,13 @@ def lambda_handler(event, context):
                     )
                 logger.error("failed msg=%s: %s", message_id, str(e))
                 put_metric("LambdaProcessingFailures")
+                put_dashboard_metric("CRUDFailures")
+                put_crud_failure_metrics(_last_failure_type or "OtherFailure", partner_name)
+                put_dashboard_metric(
+                    "Errors",
+                    dimensions=[{"Name": "PartnerName", "Value": partner_name}],
+                    namespace="HIE/PartnerMonitoring",
+                )
                 failures.append({"itemIdentifier": message_id})
 
     finally:
