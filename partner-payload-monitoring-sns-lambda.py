@@ -123,8 +123,6 @@ _last_crud_operation = None
 
 
 def track_crud(operation):
-    """Remember which kind of SQL statement (Create / Read / Update / Delete)
-    ran last, so a database error can be reported against that operation."""
     global _last_crud_operation
     _last_crud_operation = operation
 
