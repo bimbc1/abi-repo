@@ -941,7 +941,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Retries by failure type - New Function",
+                  "title": "Retries by failure type - CCDA Extraction Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -1087,7 +1087,7 @@ Resources:
                   "metrics": [
                     [
                       "AWS/SQS",
-                      "ApproximateNumberOfMessagesVisibletqueuedepth",
+                      "Queue depth",
                       "QueueName",
                       "project-hie-analytics-database-processor-queue-arn-${Env}"
                     ]
