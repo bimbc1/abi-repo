@@ -69,6 +69,21 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 def invoke_retry_handler(error, event):
+	if isinstance(error, DatabaseConnectionRetries):
+		retry_metric_name = "DatabaseConnectionRetries"
+		failure_type = "DatabaseConnectionFailure"
+	elif isinstance(error, SQSPublishError):
+		retry_metric_name = "SQSPublishRetries"
+		failure_type = "SQSPublishFailure"
+	else:
+		retry_metric_name = "SNSRetries"
+		failure_type = "OtherFailure"
+	put_metric(
+		namespace="HIE/OperationalMonitoring",
+		metric_name=retry_metric_name,
+		value=1
+	)
+	put_failure_metric("RetryEvents", failure_type)
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
@@ -81,6 +96,7 @@ def invoke_retry_handler(error, event):
             metric_name="RetryHandlerInvocationFailures",
             value=1
         )
+		put_failure_metric("RetryHandlerInvocationFailures")
         return False
 
 
@@ -296,12 +312,24 @@ def _publish_operational_alert(subject, message, failure_category):
                 }
             },
         )
+
+		put_metric(
+			namespace="HIE/OperationalMonitoring",
+			metric_name="SNSNotificationsSent",
+			value=1
+		)
         _record_alert_time(failure_category)
         logger.info(
             "Published alert to SNS topic '%s' for category '%s'.",
             SNS_TOPIC_ARN,
             failure_category,
         )
+		put_metric(
+			namespace="HIE/OperationalMonitoring",
+			metric_name="ActiveIncidents",
+			value=1,
+			dimensions=[{"Name": "FailureCategory", "Value": failure_category}]
+		)
         return True
 
     except Exception:
@@ -390,6 +418,11 @@ def get_conn():
 		)
 	except Exception as error:
 		logging.exception("Unable to connect to the database: %s", str(error))
+		put_metric(
+			namespace="HIE/OperationalMonitoring",
+			metric_name="DatabaseConnectionFailures",
+			value=1
+		)
 
 		raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
@@ -488,8 +521,50 @@ def update_partner_state(cur, partner_id, object_key):
             """,
             (partner_id, now, batch_id, clean_filename, now),
         )
-
-
+	put_metric(
+		namespace="HIE/PartnerMonitoring",
+		metric_name="PartnerTransmissionReceived",
+		value=1,
+		unit="Count",
+		dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+	)
+	if existing_row and existing_row[0]:
+        previous_last_seen_at = existing_row[0]
+        if previous_last_seen_at.tzinfo is None:
+            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
+        gap_seconds = (now - previous_last_seen_at).total_seconds()
+        execute_crud(
+            cur,
+            """
+            SELECT expected_interval_seconds
+            FROM partner_schedule
+            WHERE partner_id = %s
+            """,
+            (partner_id,),
+        )
+        schedule_row = cur.fetchone()
+        expected_interval_seconds = schedule_row[0] if schedule_row else None
+        if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
+            put_metric(
+                namespace="HIE/PartnerMonitoring",
+                metric_name="StaleConnection",
+                value=1,
+                unit="Count",
+                dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+            )
+            # ---STALE CONNECTION PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
+            for _pid, _pname in ((str(partner_id), str(partner_name)), ("All", "All")):
+                put_metric(
+                    namespace="HIE/PartnerMonitoring",
+                    metric_name="StaleConnection",
+                    value=1,
+                    unit="Count",
+                    dimensions=[
+                        {"Name": "PartnerId", "Value": _pid},
+                        {"Name": "PartnerName", "Value": _pname}
+                    ]
+                )
+		
 def clear_breach_flag(cur, partner_id, expected_interval_seconds):
     cur.execute(
         """
@@ -922,6 +997,21 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         dimensions=[{"Name": "PartnerName", "Value": partner_name}]
     )
 
+	for _pid, _pname, _value in (
+		(str(partner_id), str(partner_name), 1)
+		("All", "All", not_in_breach_count if not_in_breach_count is not None else 1),
+	):
+		put_metric(
+			namespace="HIE/PartnerMonitoring",
+			metric_name="PartnerNotInBreach",
+			value=_value,
+			unit="Count",
+			dimensions=[
+				{"Name": "PartnerName", "Value": _pname},
+				{"Name": "PartnerId", "Value": _pid}
+			]
+		)
+
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
@@ -1093,6 +1183,27 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
     except Exception as e:
         logger.warning("Failed to publish CloudWatch metric %s: %s", metric_name, e)
 
+def put_failure_metric(metric_name, failure_type=None, partner_name=None):
+    """Publish a failure metric tagged with this Lambda's name and failure type."""
+    dimensions = [{"Name": "FunctionName", "Value": FUNCTION_NAME}]
+    if failure_type:
+        dimensions.append({"Name": "FailureType", "Value": failure_type})
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name=metric_name,
+        value=1,
+        dimensions=dimensions
+    )
+    # ---CRUD FAILURES PER PARTNER (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
+    if metric_name == "CRUDFailureEvents":
+        for _pname in ([partner_name, "All"] if partner_name else ["All"]):
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name=metric_name,
+                value=1,
+                dimensions=dimensions + [{"Name": "PartnerName", "Value": _pname}]
+            )
+
 
 # MAIN OBJECT PROCESSOR
 def process_object(bucket, key, record):
@@ -1115,6 +1226,27 @@ def process_object(bucket, key, record):
         metric_name="S3ObjectArrivals",
         value=1
     )
+
+	# ---S3 OBJECT ARRIVALS PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
+    arrival_partner_name = get_partner_name_for_bucket(bucket)
+    for _pname in ([arrival_partner_name, "All"] if arrival_partner_name else ["All"]):
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="S3ObjectArrivals",
+            value=1,
+            dimensions=[{"Name": "PartnerName", "Value": _pname}]
+        )
+
+	# ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
+    registered_partner_count = get_registered_partner_count()
+    for _pname, _value in ((arrival_partner_name, 1), ("All", registered_partner_count)):
+        if _pname and _value:
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name="RegisteredPartners",
+                value=_value,
+                dimensions=[{"Name": "PartnerName", "Value": _pname}]
+            )
 
     if not is_target_file(filename):
         logger.info("Skipping non-target file: %s", filename)
@@ -1163,9 +1295,16 @@ def process_object(bucket, key, record):
 
 # LAMBDA ENTRY
 def lambda_handler(event, context):
+    logger.info("Main Lambda handler.")
+    invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
         logger.info("No records found in event.")
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="ServiceAvailability",
+            value=1
+        )
         return {"statusCode": 200, "body": "No records to process."}
     results = []
     had_failure = False
@@ -1204,14 +1343,23 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
-
             route_critical_failure_notification(e, record)
-
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="Latency",
+        value=(datetime.now(timezone.utc) - invocation_start).total_seconds(),
+        unit="Seconds"
+    )
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="ServiceAvailability",
+        value=0 if retry_handler_failed else 1
+    )
     if retry_handler_failed:
         return {
             "statusCode": 500,
