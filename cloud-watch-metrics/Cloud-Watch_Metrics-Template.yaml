@@ -1088,8 +1088,8 @@ Resources:
                     [
                       "AWS/SQS",
                       "Queue depth",
-                      "QueueName",
-                      "project-hie-analytics-database-processor-queue-arn-${Env}"
+                      "QueueArn",
+                      "project-hie-analytics-database-processor-dlq-arn-${Env}"
                     ]
                   ]
                 }
