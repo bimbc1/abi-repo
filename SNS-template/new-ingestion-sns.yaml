@@ -1,7 +1,7 @@
 ---
 AWSTemplateFormatVersion: "2010-09-09"
-Description: This template creates an SNS topic for ingestion failure alerts and a Lambda function to publish messages to the topic. 
-  
+Description: Test template for SNS topic creation and subscription.
+
 Parameters:
   Env:
     Type: String
@@ -9,36 +9,39 @@ Parameters:
       - dev
       - stg
       - prod
-  
+
 Mappings:
   EnvConfig:
     dev:
-      EmailAddress1: Abimbola.abiodun@va.gov
+      EmailAddress1: abimbolaabiodun6@gmail.com
     stg:
       EmailAddress1: abimbolaabiodun6@gmail.com
     prod:
-      EmailAddress1: 123@example.com
-  
+      EmailAddress1: abimbolaabiodun6@gmail.com
+
 Resources:
-  IngestionFailureSNSTopic:
+  TestFailureSNSTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub project-hie-analytics-ingestion-failure-alerts-${Env}
-      DisplayName: !Sub Ingestion Failure Alerts ${Env}
-
-  IngestionFailureEmailSubscription1:
+      TopicName: !Sub test-ingestion-failure-alerts-${Env}
+      DisplayName: !Sub Test Ingestion Failure Alerts ${Env}
+    
+  TestFailureEmailSubscription1:
     Type: AWS::SNS::Subscription
     Properties:
-      TopicArn: !Ref IngestionFailureSNSTopic
+      TopicArn: !Ref TestFailureSNSTopic
       Protocol: email
-      Endpoint: !FindInMap 
-        - EnvConfig
-        - !Ref Env
-        - EmailAddress1
-
+      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress1]
+  
 Outputs:
-  OperationalSNSTopicArn:
-    Description: "ARN of the SNS topic for ingestion failure alerts"
-    Value: !Ref IngestionFailureSNSTopic
+  TestSNSTopicArn:
+    Description: "ARN of the SNS topic for test ingestion failure alerts"
+    Value: !Ref TestFailureSNSTopic
     Export: 
-      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+      Name: !Sub test-ingestion-failure-alerts-sns-topic-arn-${Env}
+    
+  TestSNSTopicName:
+    Description: "Name of the SNS topic for test ingestion failure alerts"
+    Value: !GetAtt TestFailureSNSTopic.TopicName
+    Export: 
+      Name: !Sub test-ingestion-failure-alerts-sns-topic-name-${Env}
