@@ -35,7 +35,11 @@ FAILURE_MESSAGE_TYPE     = os.environ.get(
 )
 RESUMED_MESSAGE_TEMPLATE = os.environ.get(
     "RESUMED_MESSAGE_TEMPLATE",
-    "Partner $PARTNER_NAME has resumed sending payloads in $ENVIRONMENT."
+    "{partner_name} file delivery has resumed and files are being received successfully."
+)
+SNS_SUBJECT_TEMPLATE = os.environ.get(
+    "SNS_SUBJECT_TEMPLATE",
+    "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
 )
 ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
@@ -729,7 +733,7 @@ def send_recovery_sns(partner_name, partner_id, environment):
         logger.warning("SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
         return
     try:
-        subject = render_sns_template(FAILURE_MESSAGE_TYPE, partner_name, environment)
+        subject = render_sns_template(SNS_SUBJECT_TEMPLATE, partner_name, environment)
         message = render_sns_template(RESUMED_MESSAGE_TEMPLATE, partner_name, environment)
         sns.publish(
             TopicArn=SNS_TOPIC_ARN,
