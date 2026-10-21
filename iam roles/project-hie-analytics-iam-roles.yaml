@@ -151,45 +151,6 @@ Resources:
                   - lambda:InvokeFunction
                 Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:project-hie-analytics-process-notification-${Env}
 
-  IAMRolehieInsertionLambdaFullAccess:
-    Type: AWS::IAM::Role
-    Properties:
-      RoleName: !Sub project-hie-analytics-insertion-lambda-full-access-role-${Env}
-      Tags:
-        - Key: tenant:CKID
-          Value: '2598'
-        - Key: tenant:VAECID
-          Value: AWG20251201001
-        - Key: va_vasi_id
-          Value: '2238'
-      Path: /project/
-      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
-
-      ManagedPolicyArns:
-        - arn:aws-us-gov:iam::aws:policy/CloudWatchFullAccess
-        - arn:aws-us-gov:iam::aws:policy/AmazonS3FullAccess
-        - arn:aws-us-gov:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
-        - arn:aws-us-gov:iam::aws:policy/SecretsManagerReadWrite
-
-      AssumeRolePolicyDocument:
-        Version: '2012-10-17'
-        Statement:
-          - Effect: Allow
-            Principal:
-              Service: lambda.amazonaws.com
-            Action: sts:AssumeRole
-
-      Policies:
-        - PolicyName: !Sub project-hie-analytics-insertion-lambda-dlq-policy-${Env}
-          PolicyDocument:
-            Version: '2012-10-17'
-            Statement:
-              - Effect: Allow
-                Action:
-                  - sqs:SendMessage
-                Resource: !ImportValue
-                  Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
-
                 
   IAMRolehieEC2SSMSessionRole:
     Type: AWS::IAM::Role
@@ -219,11 +180,6 @@ Outputs:
     Value: !GetAtt IAMRolehieLambdaFullAccess.Arn
     Export:
       Name: !Sub project-hie-analytics-lambda-full-access-role-arn-${Env}
-      
-  LambdaInsertionRoleArn:
-    Value: !GetAtt IAMRolehieInsertionLambdaFullAccess.Arn
-    Export:
-      Name: !Sub project-hie-analytics-lambda-insertion-role-arn-${Env}
 
   EC2SSMRoleArn:
     Value: !GetAtt IAMRolehieEC2SSMSessionRole.Arn
