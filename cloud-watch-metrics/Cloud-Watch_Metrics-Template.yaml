@@ -68,7 +68,7 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
-      TreatMissingData: breaching
+      TreatMissingData: notBreaching
 
   CountMismatchEventsAlarm:
     Type: AWS::CloudWatch::Alarm
