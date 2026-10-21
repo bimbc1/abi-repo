@@ -286,7 +286,6 @@ CRUD_OPERATIONS = {
     "INSERT": "Create",
     "SELECT": "Read",
     "UPDATE": "Update",
-    "DELETE": "Delete",
 }
 _last_crud_operation = None
 def crud_operation_for(sql):
