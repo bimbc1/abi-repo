@@ -33,6 +33,10 @@ SNS_TOPIC_ARN            = os.environ.get("SNS_TOPIC_ARN")
 FAILURE_MESSAGE_TYPE     = os.environ.get(
     "FAILURE_MESSAGE_TYPE"
 )
+RESUMED_MESSAGE_TEMPLATE = os.environ.get(
+    "RESUMED_MESSAGE_TEMPLATE",
+    "Partner $PARTNER_NAME has resumed sending payloads in $ENVIRONMENT."
+)
 ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
