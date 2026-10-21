@@ -29,7 +29,7 @@ logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
  # --ENVIRONMENT VARIABLES---
 AWS_REGION               = os.environ.get("AWS_REGION", "us-gov-west-1")
-SNS_TOPIC_ARN            = os.environ.get("SNS_TOPIC_ARN")
+OPERATIONAL_SNS_TOPIC_ARN            = os.environ.get("SNS_TOPIC_ARN")
 FAILURE_MESSAGE_TYPE     = os.environ.get(
     "FAILURE_MESSAGE_TYPE"
 )
@@ -53,7 +53,7 @@ DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
 DB_HOST             = os.environ["DB_HOST", "ccda01"]
 DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME             = os.environ.get("DB_NAME")
-INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
+INGESTION_METHOD_ARN_MARKERS    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
 FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
     # --AWS CLIENTS---
 s3 = boto3.client("s3")
@@ -319,9 +319,9 @@ def _should_publish_alert(failure_category):
 def _record_alert_time(failed_category):
     _last_alert_times[failed_category] = datetime.now(timezone.utc)
 def _publish_operational_alert(subject, message, failure_category):
-    if not SNS_TOPIC_ARN:
+    if not OPERATIONAL_SNS_TOPIC_ARN:
         logging.error(
-            "SNS_TOPIC_ARN is not configured. Cannot publish alert for category '%s'.",
+            "OPERATIONAL_SNS_TOPIC_ARNN is not configured. Cannot publish alert for category '%s'.",
             failure_category,
         )
         return False
@@ -329,7 +329,7 @@ def _publish_operational_alert(subject, message, failure_category):
         return False
     try:
         sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
+            TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
             Subject=subject[:100],
             Message=message,
             MessageAttributes={
@@ -347,7 +347,7 @@ def _publish_operational_alert(subject, message, failure_category):
         _record_alert_time(failure_category)
         logger.info(
             "Published alert to SNS topic '%s' for category '%s'.",
-            SNS_TOPIC_ARN,
+            OPERATIONAL_SNS_TOPIC_ARN,
             failure_category,
         )
         put_metric(
@@ -360,7 +360,7 @@ def _publish_operational_alert(subject, message, failure_category):
     except Exception:
         logging.error(
             "Failed to publish alert to SNS topic '%s' for category '%s'.",
-            SNS_TOPIC_ARN,
+            OPERATIONAL_SNS_TOPIC_ARN,
             failure_category,
             exc_info=True,
         )
@@ -729,14 +729,14 @@ def render_sns_template(template, partner_name, environment):
     return rendered
     # --- RECOVERY SNS NOTIFICATION ---
 def send_recovery_sns(partner_name, partner_id, environment):
-    if not SNS_TOPIC_ARN:
-        logger.warning("SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
+    if not OPERATIONAL_SNS_TOPIC_ARN:
+        logger.warning("OPERATIONAL_SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
         return
     try:
         subject = render_sns_template(SNS_SUBJECT_TEMPLATE, partner_name, environment)
         message = render_sns_template(RESUMED_MESSAGE_TEMPLATE, partner_name, environment)
         sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
+            TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
             Subject=subject,
             Message=message,
         )
@@ -912,7 +912,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "ingestion_method": INGESTION_METHOD,
+        "ingestion_method": INGESTION_METHOD_ARN_MARKERS,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -966,7 +966,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "ingestion_method": INGESTION_METHOD,
+        "ingestion_method": INGESTION_METHOD_ARN_MARKERS,
         "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
