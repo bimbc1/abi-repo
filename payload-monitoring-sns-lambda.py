@@ -147,8 +147,6 @@ def put_partner_breach_metrics(partner_id, partner_name, in_breach):
         {"Name": "PartnerId", "Value": str(partner_id)},
         {"Name": "PartnerName", "Value": str(partner_name).replace(" ", "_")},
     ]
-    put_dashboard_metric("StaleConnection", 1 if in_breach else 0,
-                         dimensions=dimensions, namespace="HIE/PartnerMonitoring")
     put_dashboard_metric("PartnerNotInBreach", 0 if in_breach else 1,
                          dimensions=dimensions, namespace="HIE/PartnerMonitoring")
 
