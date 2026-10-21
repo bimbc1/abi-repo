@@ -125,6 +125,13 @@ def get_conn():
             )
         except Exception as e:
             put_metric("LambdaRetries")
+            put_dashboard_metric(
+                "RetryEvents",
+                dimensions=[
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+                ],
+            )
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
 
