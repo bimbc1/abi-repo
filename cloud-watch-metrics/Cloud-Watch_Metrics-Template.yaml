@@ -1016,8 +1016,8 @@ Resources:
                     [
                       "AWS/SQS",
                       "Queue depth",
-                      "QueueArn",
-                      "project-hie-analytics-database-processor-dlq-arn-${Env}"
+                      "QueueName",
+                      "${DlqName}"
                     ]
                   ]
                 }
@@ -1249,6 +1249,9 @@ Resources:
               - ':'
               - !ImportValue
                 Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+
+          DlqName: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-dlq-name-${Env}
           # DATABASE HEALTH BUTTONS -- one list item per database. 
           DatabaseHealthButtons: !Join
             - ' '
