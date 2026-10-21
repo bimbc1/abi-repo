@@ -92,7 +92,7 @@ def format_last_seen_duration(elapsed_seconds):
 
 
 def publish_partner_metric(partner_name, metric_name, value):
-    partner_name_clean = str(partner_name).replace(" ", "_")
+    partner_name_clean = str(partner_name)
 
     cloudwatch.put_metric_data(
         Namespace="HIE/PartnerMonitoring",
@@ -134,7 +134,7 @@ def put_crud_failure_metrics(failure_type, partner_name):
     put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
     partner_values = ["All"]
     if partner_name is not None:
-        partner_values.insert(0, str(partner_name).replace(" ", "_"))
+        partner_values.insert(0, str(partner_name))
     for pname in partner_values:
         put_dashboard_metric(
             "CRUDFailureEvents",
@@ -145,7 +145,7 @@ def put_crud_failure_metrics(failure_type, partner_name):
 def put_partner_breach_metrics(partner_id, partner_name, in_breach):
     dimensions = [
         {"Name": "PartnerId", "Value": str(partner_id)},
-        {"Name": "PartnerName", "Value": str(partner_name).replace(" ", "_")},
+        {"Name": "PartnerName", "Value": str(partner_name)},
     ]
     put_dashboard_metric("PartnerNotInBreach", 0 if in_breach else 1,
                          dimensions=dimensions, namespace="HIE/PartnerMonitoring")
