@@ -111,10 +111,61 @@ def publish_partner_metric(partner_name, metric_name, value):
         ]
     )
 
+# ---- DASHBOARD METRICS ----
+FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+
+
+def put_dashboard_metric(metric_name, value=1, dimensions=None,
+                         namespace="HIE/OperationalMonitoring"):
+    try:
+        metric = {"MetricName": metric_name, "Value": value, "Unit": "Count"}
+        if dimensions:
+            metric["Dimensions"] = dimensions
+        cloudwatch.put_metric_data(Namespace=namespace, MetricData=[metric])
+    except Exception as metric_error:
+        logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
+
+
+def put_crud_failure_metrics(failure_type, partner_name):
+    dimensions = [
+        {"Name": "FunctionName", "Value": FUNCTION_NAME},
+        {"Name": "FailureType", "Value": failure_type},
+    ]
+    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
+    partner_values = ["All"]
+    if partner_name is not None:
+        partner_values.insert(0, str(partner_name).replace(" ", "_"))
+    for pname in partner_values:
+        put_dashboard_metric(
+            "CRUDFailureEvents",
+            dimensions=dimensions + [{"Name": "PartnerName", "Value": pname}],
+        )
+
+
+def put_partner_breach_metrics(partner_id, partner_name, in_breach):
+    dimensions = [
+        {"Name": "PartnerId", "Value": str(partner_id)},
+        {"Name": "PartnerName", "Value": str(partner_name).replace(" ", "_")},
+    ]
+    put_dashboard_metric("StaleConnection", 1 if in_breach else 0,
+                         dimensions=dimensions, namespace="HIE/PartnerMonitoring")
+    put_dashboard_metric("PartnerNotInBreach", 0 if in_breach else 1,
+                         dimensions=dimensions, namespace="HIE/PartnerMonitoring")
+
+
+# ---- CRUD OPERATION TRACKING ----
+_last_crud_operation = None
+
+
+def track_crud(operation):
+    global _last_crud_operation
+    _last_crud_operation = operation
 
 def lambda_handler(event, context):
     conn = None
     cur = None
+    current_partner_name = None
+    track_crud(None)
 
     try:
         current_time = datetime.now(timezone.utc)
@@ -127,6 +178,7 @@ def lambda_handler(event, context):
         # =========================
         # Step 1: Get all partners
         # =========================
+        track_crud("Read")
         cur.execute("""
             SELECT
                 ps.partner_id,
@@ -162,9 +214,12 @@ def lambda_handler(event, context):
             if partner_name is None:
                 partner_name = partner_id
 
+            current_partner_name = partner_name
+
             # =========================
             # Step 3: Get last payload timestamp
             # =========================
+            track_crud("Read")
             cur.execute("""
                 SELECT last_seen_at
                 FROM partner_transmission_state
@@ -221,6 +276,7 @@ def lambda_handler(event, context):
 
                 publish_partner_metric(partner_name, "PartnerInBreach", 1)
                 publish_partner_metric(partner_name, "BreachEvents", 1)
+                put_partner_breach_metrics(partner_id, partner_name, True)
 
                 should_send_email = False
 
@@ -272,7 +328,8 @@ def lambda_handler(event, context):
                         Subject=subject,
                         Message=message
                     )
-
+                    
+                    track_crud("Update")
                     cur.execute("""
                         UPDATE partner_schedule
                         SET breach_flag = TRUE,
@@ -289,6 +346,7 @@ def lambda_handler(event, context):
                 else:
                     # Keep breach_flag true even if not sending email again yet
                     if not breach_flag:
+                        track_crud("Update")
                         cur.execute("""
                             UPDATE partner_schedule
                             SET breach_flag = TRUE
@@ -306,8 +364,10 @@ def lambda_handler(event, context):
             # =========================
             else:
                 publish_partner_metric(partner_name, "PartnerInBreach", 0)
+                put_partner_breach_metrics(partner_id, partner_name, False)
 
                 if breach_flag:
+                    track_crud("Update")
                     cur.execute("""
                         UPDATE partner_schedule
                         SET breach_flag = FALSE
@@ -329,6 +389,11 @@ def lambda_handler(event, context):
 
     except Exception as e:
         logger.exception("Lambda execution failed")
+
+        if conn is None:
+            put_dashboard_metric("DatabaseConnectionFailures")
+        elif isinstance(e, pg8000.Error) and _last_crud_operation:
+            put_crud_failure_metrics(_last_crud_operation, current_partner_name)
 
         if conn:
             conn.rollback()
