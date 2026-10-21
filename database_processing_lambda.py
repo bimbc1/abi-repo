@@ -60,6 +60,54 @@ def publish_partner_metric(partner_name, metric_name, value):
         ]
     )
 
+# ---- DASHBOARD METRICS ----
+FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+
+
+def put_dashboard_metric(metric_name, value=1, dimensions=None):
+    try:
+        metric = {"MetricName": metric_name, "Value": value, "Unit": "Count"}
+        if dimensions:
+            metric["Dimensions"] = dimensions
+        cloudwatch.put_metric_data(Namespace="HIE/OperationalMonitoring", MetricData=[metric])
+    except Exception as metric_error:
+        logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
+
+
+def put_crud_failure_metrics(failure_type, partner_name):
+    dimensions = [
+        {"Name": "FunctionName", "Value": FUNCTION_NAME},
+        {"Name": "FailureType", "Value": failure_type},
+    ]
+    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
+    for pname in ([partner_name, "All"] if partner_name and partner_name != "All" else ["All"]):
+        put_dashboard_metric(
+            "CRUDFailureEvents",
+            dimensions=dimensions + [{"Name": "PartnerName", "Value": pname}],
+        )
+
+
+# ---- CRUD OPERATION TRACKING ----
+_last_crud_operation = None
+_last_failure_type = None
+
+
+def track_crud(operation):
+    global _last_crud_operation
+    _last_crud_operation = operation
+
+
+def classify_failure(e):
+    global _last_failure_type
+    if isinstance(e, pg8000.Error) and _last_crud_operation:
+        _last_failure_type = _last_crud_operation
+
+
+def reset_failure_tracking():
+    global _last_crud_operation, _last_failure_type
+    _last_crud_operation = None
+    _last_failure_type = None
+
 # ---- DB CONNECTION WITH RETRY ----
 def get_conn():
     secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
@@ -90,6 +138,7 @@ def get_conn():
     except Exception as e:
         put_metric("DBConnectionFailure")
         logger.error("DB connection failed after all retries: %s", str(e))
+        put_dashboard_metric("DatabaseConnectionFailures")
         raise Exception("Failed to connect to PostgreSQL after all retries")
 
 
@@ -104,7 +153,8 @@ def process_message(message):
             try:
                 upsert_manifest_metadata(message)
             except Exception as e:
-                put_metric("LambdaRetries")
+                put_metric("LambdaRetries") 
+                classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
                 conn.rollback()
                 raise
@@ -126,6 +176,7 @@ def process_message(message):
                 upsert_patient_report_metadata(message)
             except Exception as e:
                 put_metric("LambdaRetries")
+                classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
                 conn.rollback()
                 raise
@@ -173,6 +224,7 @@ def upsert_manifest_metadata(message):
     cur = conn.cursor()
 
     # ---- CHECK IF manifest_batch ROW EXISTS ----
+    track_crud("Read")
     cur.execute(
         """
         SELECT COUNT(*) FROM manifest_batch
@@ -188,6 +240,7 @@ def upsert_manifest_metadata(message):
         logger.info("manifest_batch row already exists for batch_id=%s file_name=%s skipping",
                     batch_id, file_name)
     else:
+        track_crud("Create")
         cur.execute(
             """
             INSERT INTO manifest_batch (
@@ -216,6 +269,7 @@ def upsert_manifest_metadata(message):
                 continue
 
             # ---- CHECK IF patient_details ROW EXISTS ----
+            track_crud("Read")
             cur.execute(
                 """
                 SELECT COUNT(*) FROM patient_details
@@ -233,6 +287,7 @@ def upsert_manifest_metadata(message):
                 logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                             partner_id, batch_id, edipi_value, file_name)
             else:
+                track_crud("Create")
                 cur.execute(
                     """
                     INSERT INTO patient_details (
@@ -316,6 +371,7 @@ def upsert_patient_report_metadata(message):
             continue
 
         # ---- CHECK IF patient_details ROW EXISTS ----
+        track_crud("Read")
         cur.execute(
             """
             SELECT COUNT(*) FROM patient_details
@@ -333,6 +389,7 @@ def upsert_patient_report_metadata(message):
             logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                         partner_id, batch_id, edipi_value, file_name)
         else:
+            track_crud("Create")
             cur.execute(
                 """
                 INSERT INTO patient_details (
@@ -397,6 +454,7 @@ def lambda_handler(event, context):
             message_id = record.get("messageId")
             raw_body   = record.get("body")
             message = None
+            reset_failure_tracking()
 
             try:
                 message = json.loads(raw_body)
@@ -452,6 +510,8 @@ def lambda_handler(event, context):
                     )
                 logger.error("failed msg=%s: %s", message_id, str(e))
                 put_metric("LambdaProcessingFailures")
+                if _last_failure_type:
+                    put_crud_failure_metrics(_last_failure_type, partner_name)
                 failures.append({"itemIdentifier": message_id})
 
     finally:
