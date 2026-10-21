@@ -496,42 +496,6 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 22,
-                "width": 24,
-                "height": 1,
-                "properties": {
-                  "markdown": "## Database Connection Error"
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 23,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Database connection error",
-                  "region": "${AWS::Region}",
-                  "view": "singleValue",
-                  "period": 300,
-                  "stat": "Sum",
-                  "start": "-PT24H",
-                  "end": "P0D",
-                  "setPeriodToTimeRange": true,
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "DatabaseConnectionFailures",
-                      {
-                        "label": "Database connection errors"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
-                "type": "text",
-                "x": 0,
                 "y": 29,
                 "width": 24,
                 "height": 1,
@@ -896,18 +860,6 @@ Resources:
                         "label": "Database connection",
                         "color": "#d13212"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -965,18 +917,6 @@ Resources:
                         "label": "Database connection",
                         "color": "#d13212"
                       }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
-                      }
                     ]
                   ],
                   "annotations": {
@@ -1033,18 +973,6 @@ Resources:
                       {
                         "label": "Database connection",
                         "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
                       }
                     ]
                   ],
@@ -1207,46 +1135,6 @@ Resources:
                 "height": 1,
                 "properties": {
                   "markdown": "## Partner Connectivity (select a partner, or All, from the Partner dropdown at the top)"
-                }
-              },
-              {
-                "type": "metric",
-                "x": 0,
-                "y": 57,
-                "width": 24,
-                "height": 6,
-                "properties": {
-                  "title": "Partner Connectivity - Current Connection Status",
-                  "region": "${AWS::Region}",
-                  "metrics": [
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"StaleConnection\" PartnerName=\"__PARTNER__\"', 'Sum')",
-                        "id": "s1",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SUM(s1)",
-                        "id": "m1",
-                        "label": "Stale connections",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "IF(m1>0,m1)",
-                        "id": "e1",
-                        "label": "STALE CONNECTION DETECTED",
-                        "color": "#d62728"
-                      }
-                    ]
-                  ],
-                  "view": "singleValue",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true
                 }
               },
               {
