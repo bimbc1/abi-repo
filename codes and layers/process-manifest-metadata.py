@@ -44,6 +44,7 @@ SNS_SUBJECT_TEMPLATE = os.environ.get(
 ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
+WARNING_INFO = os.environ.get("WARNING_INFO", "")
 _last_alert_times = {}
 DEFAULT_EXPECTED_INTERVAL_SECONDS   = 1800
 MIN_SAMPLES_BEFORE_LEARNING         = 5
@@ -326,6 +327,8 @@ def _publish_operational_alert(subject, message, failure_category):
         return False
     if not _should_publish_alert(failure_category):
         return False
+    if WARNING_INFO:
+        message = f"{message}\n\n{WARNING_INFO}"
     try:
         sns.publish(
             TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
@@ -734,6 +737,8 @@ def send_recovery_sns(partner_name, partner_id, environment):
     try:
         subject = render_sns_template(SNS_SUBJECT_TEMPLATE, partner_name, environment)
         message = render_sns_template(RESUMED_MESSAGE_TEMPLATE, partner_name, environment)
+        if WARNING_INFO:
+            message = f"{message}\n\n{WARNING_INFO}"
         sns.publish(
             TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
             Subject=subject,
