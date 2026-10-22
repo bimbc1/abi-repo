@@ -68,6 +68,14 @@ Resources:
         handler also failed), or when it has not reported availability at all.
       Namespace: HIE/OperationalMonitoring
       MetricName: ServiceAvailability
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
       Statistic: Minimum
       Period: 300
       EvaluationPeriods: 1
