@@ -320,7 +320,7 @@ def _record_alert_time(failed_category):
 def _publish_operational_alert(subject, message, failure_category):
     if not OPERATIONAL_SNS_TOPIC_ARN:
         logging.error(
-            "OPERATIONAL_SNS_TOPIC_ARNN is not configured. Cannot publish alert for category '%s'.",
+            "OPERATIONAL_SNS_TOPIC_ARN is not configured. Cannot publish alert for category '%s'.",
             failure_category,
         )
         return False
