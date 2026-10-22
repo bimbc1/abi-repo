@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import time
 import boto3
 import pg8000
 from datetime import datetime, timezone
@@ -52,19 +53,34 @@ def get_db_credentials():
 
 def get_conn():
     """
-    Create a PostgreSQL connection using pg8000.
+    Create a PostgreSQL connection using pg8000, retrying up to 3 times.
     """
     creds = get_db_credentials()
+    max_attempts = 3
 
-    return pg8000.connect(
-        host=creds["host"],
-        port=creds["port"],
-        database=creds["database"],
-        user=creds["user"],
-        password=creds["password"],
-        ssl_context=creds["ssl_context"]
-    )
-
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return pg8000.connect(
+                host=creds["host"],
+                port=creds["port"],
+                database=creds["database"],
+                user=creds["user"],
+                password=creds["password"],
+                ssl_context=creds["ssl_context"]
+            )
+        except Exception as e:
+            put_dashboard_metric(
+                "RetryEvents",
+                dimensions=[
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+                ],
+            )
+            logger.warning("DB connection attempt %s/%s failed: %s",
+                           attempt, max_attempts, str(e))
+            if attempt == max_attempts:
+                raise
+            time.sleep(1)
 
 def format_last_seen_duration(elapsed_seconds):
     """
