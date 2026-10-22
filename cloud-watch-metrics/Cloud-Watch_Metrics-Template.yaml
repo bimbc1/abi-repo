@@ -1047,7 +1047,7 @@ Resources:
                   "metrics": [
                     [
                       "AWS/SQS",
-                      "Queue depth",
+                      "ApproximateNumberOfMessagesVisible",
                       "QueueName",
                       "${DlqName}"
                     ]
