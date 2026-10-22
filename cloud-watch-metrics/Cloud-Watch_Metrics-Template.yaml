@@ -311,7 +311,8 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-LambdaFailures",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures"
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ProcessingDelay"
                   ]
                 }
               },
