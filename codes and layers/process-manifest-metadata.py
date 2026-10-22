@@ -54,7 +54,7 @@ DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
 DB_HOST             = os.environ["DB_HOST"]
 DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME             = os.environ.get("DB_NAME", "ccda01")
-INGESTION_METHOD_ARN_MARKERS     = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
+INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
 FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
     # --AWS CLIENTS---
 s3 = boto3.client("s3")
@@ -916,7 +916,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "INGESTION_METHOD_ARN_MARKERS ": INGESTION_METHOD_ARN_MARKERS,
+        "INGESTION_METHOD": INGESTION_METHOD_ARN_MARKERS,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
