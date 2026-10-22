@@ -40,6 +40,9 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
   MetadataLambdaFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -54,6 +57,9 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
   ServiceAvailabilityAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -69,6 +75,9 @@ Resources:
       Threshold: 1
       ComparisonOperator: LessThanThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
   CountMismatchEventsAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -83,6 +92,9 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
   RetryHandlerInvocationFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -98,6 +110,9 @@ Resources:
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
   # LOG METRIC FILTERS -- 
 
@@ -278,6 +293,23 @@ Resources:
                 "height": 1,
                 "properties": {
                   "markdown": "## Operational Monitoring Status"
+                }
+              },
+              {
+                "type": "alarm",
+                "x": 0,
+                "y": 2,
+                "width": 24,
+                "height": 2,
+                "properties": {
+                  "title": "Operational Monitoring Status",
+                  "alarms": [
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-DatabaseConnectionFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-LambdaFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures"
+                  ]
                 }
               },
               {
