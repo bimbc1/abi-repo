@@ -137,7 +137,7 @@ Resources:
                   - sns:Publish
                 Resource: 
                   - Fn::ImportValue:
-                      Fn::Sub: project-hie-analytics-ingestion-failure-alerts-${Env}
+                      Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
                   - Fn::ImportValue:
                       Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
                       
