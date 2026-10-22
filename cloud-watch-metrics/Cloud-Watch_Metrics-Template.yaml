@@ -25,7 +25,6 @@ Conditions:
 
 Resources:
 
-  # ALARMS -- these watch metrics that already exist in CloudWatch.
 
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
@@ -114,7 +113,23 @@ Resources:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
-  # LOG METRIC FILTERS -- 
+  ProcessingDelayAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-ProcessingDelay
+      AlarmDescription: Fires when a file takes 15 minutes (900 seconds) or longer to process.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: ProcessingDelaySeconds
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 900
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+ 
 
   PartnerLoginFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
@@ -128,12 +143,6 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
-  # This Transfer Family server writes plain-text log lines, e.g.
-  #   ERRORS AUTH_FAILURE Method=publickey User=Epic Message="..." SourceIP=...
-  #   Oracle.4f2ac91b2e9a6d35 CLOSE Path=/bucket/file.txt BytesIn=1553
-  # The transformer splits each line into stream, activity and the Key=Value
-  # pairs (User, BytesIn, ...). "tfuser" is the username taken from the
-  # stream (Oracle.<session-id> -> Oracle), used for uploads that have no User=.
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
     Properties:
@@ -156,8 +165,6 @@ Resources:
                 From: '^(.+)\.[0-9A-Za-z]+$'
                 To: '$1'
 
-  # Per-user activity; fills the "Transfer Family user" dropdown (with the
-  # "All" entry the Manifest Lambda publishes under PartnerName).
   TransferFamilyUsersMetricFilter:
     Type: AWS::Logs::MetricFilter
     DependsOn: TransferLogTransformer
@@ -174,7 +181,6 @@ Resources:
             - Key: PartnerName
               Value: $.tfuser
 
-  # Login failures per user (dimension "All" so "All" matches every user).
   LoginFailuresByUserMetricFilter:
     Type: AWS::Logs::MetricFilter
     DependsOn: TransferLogTransformer
@@ -191,8 +197,6 @@ Resources:
             - Key: All
               Value: $.User
 
-  # Counts each file uploaded through Transfer Family per user (CLOSE line
-  # with BytesIn=). Dimension "All" so the dropdown value "All" matches everyone.
   TransferFamilyFilesInMetricFilter:
     Type: AWS::Logs::MetricFilter
     DependsOn: TransferLogTransformer
@@ -240,8 +244,7 @@ Resources:
           MetricValue: '1'
           DefaultValue: 0
           Unit: Count
-
-  # DASHBOARD -- displays the metrics 
+ 
 
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
@@ -1264,7 +1267,6 @@ Resources:
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
                     - console.aws.amazon.com
-          # LAMBDA HEALTH BUTTONS -- one list item per Lambda function.
           LambdaHealthButtons: !Join
             - ' '
             - - !Sub
