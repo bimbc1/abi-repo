@@ -1395,7 +1395,8 @@ def lambda_handler(event, context):
         put_metric(
             namespace="HIE/OperationalMonitoring",
             metric_name="ServiceAvailability",
-            value=1
+            value=1,
+            dimensions=[{"Name": "FunctionName", "Value": FUNCTION_NAME}]
         )
         return {"statusCode": 200, "body": "No records to process."}
     results = []
@@ -1450,7 +1451,8 @@ def lambda_handler(event, context):
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="ServiceAvailability",
-        value=0 if retry_handler_failed else 1
+        value=0 if retry_handler_failed else 1,
+        dimensions=[{"Name": "FunctionName", "Value": FUNCTION_NAME}]
     )
     if retry_handler_failed:
         return {
