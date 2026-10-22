@@ -916,7 +916,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "INGESTION_METHOD": INGESTION_METHOD_ARN_MARKERS,
+        "INGESTION_METHOD": INGESTION_METHOD,
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -970,7 +970,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "batch_id": batch_id
         },
         "partner_id": partner_context.get("partner_id"),
-        "ingestion_method": INGESTION_METHOD_ARN_MARKERS,
+        "ingestion_method": INGESTION_METHOD,
         "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
