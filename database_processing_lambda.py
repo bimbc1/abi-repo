@@ -161,6 +161,13 @@ def process_message(message):
                 upsert_manifest_metadata(message)
             except Exception as e:
                 put_metric("LambdaRetries") 
+                put_dashboard_metric(
+                    "RetryEvents",
+                    dimensions=[
+                        {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                        {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+                    ],
+                )
                 classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
                 conn.rollback()
@@ -183,6 +190,13 @@ def process_message(message):
                 upsert_patient_report_metadata(message)
             except Exception as e:
                 put_metric("LambdaRetries")
+                put_dashboard_metric(
+                    "RetryEvents",
+                    dimensions=[
+                        {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                        {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+                    ],
+                )
                 classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
                 conn.rollback()
