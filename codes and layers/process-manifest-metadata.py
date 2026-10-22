@@ -50,9 +50,9 @@ MIN_SAMPLES_BEFORE_LEARNING         = 5
 sns = boto3.client("sns", region_name=AWS_REGION)
 METADATA_QUEUE_URL  = os.environ["METADATA_QUEUE_URL"]
 DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
-DB_HOST             = os.environ("DB_HOST", "ccda01")
+DB_HOST             = os.environ["DB_HOST"]
 DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME             = os.environ.get("DB_NAME")
+DB_NAME             = os.environ.get("DB_NAME", "ccda01")
 INGESTION_METHOD_ARN_MARKERS    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
 FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
     # --AWS CLIENTS---
