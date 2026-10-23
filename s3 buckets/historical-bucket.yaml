@@ -16,7 +16,7 @@ Resources:
         Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
-      SourceArn: !Sub arn:aws-us-gov:s3:::project-hie-analytics-OracleHealth-Historical-Documents-Uploads-Bucket-Arn-${Env}
+      SourceArn: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-historical-documents-${Env}
  
 
   # Oracle Document Uploads Bucket
