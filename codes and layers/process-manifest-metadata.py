@@ -529,6 +529,7 @@ def get_partner_name(cur, partner_id):
     return row[0] if row else f"Partner {partner_id}"
     # ---PARTNER NAME FOR A BUCKET (cached; used for per-partner file arrival metrics)---
 _bucket_partner_names = {}
+_bucket_partner_ids = {}
 def get_partner_name_for_bucket(bucket):
     if bucket in _bucket_partner_names:
         return _bucket_partner_names[bucket]
@@ -539,6 +540,7 @@ def get_partner_name_for_bucket(bucket):
             partner_id, _, _ = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
         _bucket_partner_names[bucket] = partner_name
+        _bucket_partner_ids[bucket] = partner_id
         return partner_name
     except Exception as e:
         logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
@@ -1131,18 +1133,6 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 {"Name": "PartnerId", "Value": _pid}
             ]
         )
-        # ---PARTNER NAME + PARTNER ID LABEL (used by the dashboard Partner dropdown)---
-        put_metric(
-            namespace="HIE/PartnerMonitoring",
-            metric_name="PartnerNotInBreach",
-            value=_value,
-            unit="Count",
-            dimensions=[
-                {"Name": "PartnerName", "Value": _pname},
-                {"Name": "PartnerId", "Value": _pid},
-                {"Name": "PartnerLabel", "Value": _pname if _pid == "All" else f"{_pname} ({_pid})"}
-            ]
-        )
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
@@ -1354,6 +1344,19 @@ def process_object(bucket, key, record):
             metric_name="S3ObjectArrivals",
             value=1,
             dimensions=[{"Name": "PartnerName", "Value": _pname}]
+        )
+    # ---S3 OBJECT ARRIVALS PER PARTNER NAME + PARTNER ID (used by the dashboard Partner dropdown)---
+    arrival_partner_id = _bucket_partner_ids.get(bucket)
+    for _pid, _pname in ([(str(arrival_partner_id), arrival_partner_name), ("All", "All")] if arrival_partner_name and arrival_partner_id else [("All", "All")]):
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="S3ObjectArrivals",
+            value=1,
+            dimensions=[
+                {"Name": "PartnerName", "Value": _pname},
+                {"Name": "PartnerId", "Value": _pid},
+                {"Name": "PartnerLabel", "Value": _pname if _pid == "All" else f"{_pname} ({_pid})"}
+            ]
         )
     # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
     registered_partner_count = get_registered_partner_count()
