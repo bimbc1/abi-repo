@@ -269,8 +269,8 @@ Resources:
                 "id": "partner",
                 "label": "Partner",
                 "visible": true,
-                "search": "{HIE/PartnerMonitoring,PartnerId,PartnerName} MetricName=\"PartnerNotInBreach\"",
-                "populateFrom": "PartnerName",
+                "search": "{HIE/OperationalMonitoring,PartnerId,PartnerLabel,PartnerName} MetricName=\"S3ObjectArrivals\"",
+                "populateFrom": "PartnerLabel",
                 "defaultValue": "All"
               },
               {
