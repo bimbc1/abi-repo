@@ -1131,6 +1131,18 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 {"Name": "PartnerId", "Value": _pid}
             ]
         )
+        # ---PARTNER NAME + PARTNER ID LABEL (used by the dashboard Partner dropdown)---
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerNotInBreach",
+            value=_value,
+            unit="Count",
+            dimensions=[
+                {"Name": "PartnerName", "Value": _pname},
+                {"Name": "PartnerId", "Value": _pid},
+                {"Name": "PartnerLabel", "Value": _pname if _pid == "All" else f"{_pname} ({_pid})"}
+            ]
+        )
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
