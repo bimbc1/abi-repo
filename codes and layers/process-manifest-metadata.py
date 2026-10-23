@@ -46,8 +46,6 @@ ALERT_COOLDOWN_SECONDS = int(
 )
 WARNING_INFO = os.environ.get("WARNING_INFO", "")
 _last_alert_times = {}
-DEFAULT_EXPECTED_INTERVAL_SECONDS   = 1800
-MIN_SAMPLES_BEFORE_LEARNING         = 5
 sns = boto3.client("sns", region_name=AWS_REGION)
 METADATA_QUEUE_URL  = os.environ["METADATA_QUEUE_URL"]
 DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
@@ -658,7 +656,7 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
                     ]
                 )
     # --- BREACH AND RECOVERY STATE MANAGEMENT ---
-def clear_breach_flag(cur, partner_id, expected_interval_seconds):
+def clear_breach_flag(cur, partner_id):
     execute_crud(
         cur,
         """
@@ -675,20 +673,18 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
             """
             INSERT INTO partner_schedule(
                 partner_id,
-                expected_interval_seconds,
                 breach_flag,
                 last_alert_at,
                 updated_at
             )
-            VALUES (%s, %s, FALSE, NOW(), NOW())
+            VALUES (%s, FALSE, NOW(), NOW())
             """,
-            (partner_id, expected_interval_seconds),
+            (partner_id,),
         )
         logger.info(
             "No partner_schedule row existed for partner_id=%s -- created one "
-            "(first successful batch) with expected_interval_seconds=%s.",
-            partner_id,
-            expected_interval_seconds
+            "(first successful batch).",
+            partner_id
         )
         return False
     if row[0]:
@@ -1028,13 +1024,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
             update_partner_state(cur, partner_id, latest_meta["key"], partner_name)
-            elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
-            sample_count = get_partner_sample_count(cur, partner_id)
-            if sample_count < MIN_SAMPLES_BEFORE_LEARNING:
-                expected_interval_seconds = DEFAULT_EXPECTED_INTERVAL_SECONDS
-            else:
-                expected_interval_seconds = max(60, int(round(elapsed_seconds)))
-            breach_cleared = clear_breach_flag(cur, partner_id, expected_interval_seconds)
+            breach_cleared = clear_breach_flag(cur, partner_id)
         conn.commit()
         # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
         try:
