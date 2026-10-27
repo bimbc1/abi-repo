@@ -306,7 +306,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 2,
+                "y": 4,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -316,7 +316,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 3,
+                "y": 5,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -421,7 +421,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 9,
+                "y": 11,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -446,7 +446,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 15,
+                "y": 17,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -456,7 +456,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 16,
+                "y": 18,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -488,7 +488,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 16,
+                "y": 18,
                 "width": 16,
                 "height": 6,
                 "properties": {
@@ -519,7 +519,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 29,
+                "y": 24,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -529,7 +529,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 30,
+                "y": 25,
                 "width": 24,
                 "height": 2,
                 "properties": {
@@ -539,7 +539,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 32,
+                "y": 27,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -618,7 +618,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 6,
-                "y": 32,
+                "y": 27,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -697,7 +697,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 32,
+                "y": 27,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -776,7 +776,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 38,
+                "y": 33,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -786,7 +786,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 39,
+                "y": 34,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -854,8 +854,8 @@ Resources:
               },
               {
                 "type": "metric",
-                "x": 0,
-                "y": 39,
+                "x": 8,
+                "y": 34,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -911,8 +911,8 @@ Resources:
               },
               {
                 "type": "metric",
-                "x": 0,
-                "y": 39,
+                "x": 16,
+                "y": 34,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -968,8 +968,8 @@ Resources:
               },
               {
                 "type": "metric",
-                "x": 8,
-                "y": 39,
+                "x": 0,
+                "y": 40,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1025,8 +1025,8 @@ Resources:
               },
               {
                 "type": "metric",
-                "x": 16,
-                "y": 39,
+                "x": 8,
+                "y": 40,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1048,7 +1048,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 45,
+                "y": 46,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1058,7 +1058,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 46,
+                "y": 47,
                 "width": 24,
                 "height": 3,
                 "properties": {
@@ -1068,7 +1068,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 49,
+                "y": 50,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1078,7 +1078,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 50,
+                "y": 51,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1101,7 +1101,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 50,
+                "y": 51,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -1121,7 +1121,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 56,
+                "y": 57,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1131,7 +1131,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 63,
+                "y": 58,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1171,7 +1171,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 69,
+                "y": 64,
                 "width": 24,
                 "height": 6,
                 "properties": {
