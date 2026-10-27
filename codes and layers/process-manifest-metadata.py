@@ -29,7 +29,8 @@ logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
  # --ENVIRONMENT VARIABLES---
 AWS_REGION               = os.environ.get("AWS_REGION", "us-gov-west-1")
-OPERATIONAL_SNS_TOPIC_ARN            = os.environ.get("SNS_TOPIC_ARN")
+OPERATIONAL_SNS_TOPIC_ARN            = os.environ.get("OPERATIONAL_SNS_TOPIC_ARN")
+RECOVERY_SNS_TOPIC_ARN               = os.environ.get("RECOVERY_SNS_TOPIC_ARN")
 FAILURE_MESSAGE_TYPE     = os.environ.get(
     "FAILURE_MESSAGE_TYPE"
 )
@@ -729,8 +730,8 @@ def render_sns_template(template, partner_name, environment):
     return rendered
     # --- RECOVERY SNS NOTIFICATION ---
 def send_recovery_sns(partner_name, partner_id, environment):
-    if not OPERATIONAL_SNS_TOPIC_ARN:
-        logger.warning("OPERATIONAL_SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
+    if not RECOVERY_SNS_TOPIC_ARN:
+        logger.warning("RECOVERY_SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
         return
     try:
         subject = render_sns_template(SNS_SUBJECT_TEMPLATE, partner_name, environment)
@@ -738,7 +739,7 @@ def send_recovery_sns(partner_name, partner_id, environment):
         if WARNING_INFO:
             message = f"{message}\n\n{WARNING_INFO}"
         sns.publish(
-            TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
+            TopicArn=RECOVERY_SNS_TOPIC_ARN,
             Subject=subject,
             Message=message,
         )
