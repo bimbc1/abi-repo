@@ -457,7 +457,7 @@ def route_critical_failure_notification(error, context=None):
     )
     return False
     # ---ESTABLISHING CONNECTION TO DATABASE---
-def get_conn():
+def get_conn(publish_failure_metric=True):
     try:
         secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
         creds = json.loads(secret['SecretString'])
@@ -471,11 +471,12 @@ def get_conn():
         )
     except Exception as error:
         logging.exception("Unable to connect to the database: %s", str(error))
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="DatabaseConnectionFailures",
-            value=1
-        )
+        if publish_failure_metric:
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name="DatabaseConnectionFailures",
+                value=1
+            )
         raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
         ) from error
@@ -534,7 +535,7 @@ def get_partner_name_for_bucket(bucket):
         return _bucket_partner_names[bucket]
     conn = None
     try:
-        conn = get_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             partner_id, _, _ = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
@@ -556,7 +557,7 @@ def get_registered_partner_count():
         return _registered_partner_count["value"]
     conn = None
     try:
-        conn = get_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             execute_crud(cur, "SELECT COUNT(*) FROM partner_registry")
             row = cur.fetchone()
