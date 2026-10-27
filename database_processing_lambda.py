@@ -512,7 +512,7 @@ def lambda_handler(event, context):
                     pass
 
                 partner_name = (
-                    message.get("partner", {}).get("partner_name", "Unknown")
+                    (message.get("partner") or {}).get("partner_name") or "Unknown"
                     if isinstance(message, dict)
                     else "Unknown"
                 )
