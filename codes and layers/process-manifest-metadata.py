@@ -1327,6 +1327,9 @@ def process_object(bucket, key, record):
         metric_name="S3ObjectArrivals",
         value=1
     )
+    if not is_target_file(filename):
+        logger.info("Skipping non-target file: %s", filename)
+        return {"processed": False, "reason": "NON_TARGET_FILE"}
     # ---S3 OBJECT ARRIVALS PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
     arrival_partner_name = get_partner_name_for_bucket(bucket)
     for _pname in ([arrival_partner_name, "All"] if arrival_partner_name else ["All"]):
@@ -1359,9 +1362,6 @@ def process_object(bucket, key, record):
                 value=_value,
                 dimensions=[{"Name": "PartnerName", "Value": _pname}]
             )
-    if not is_target_file(filename):
-        logger.info("Skipping non-target file: %s", filename)
-        return {"processed": False, "reason": "NON_TARGET_FILE"}
     result = build_metadata_messages(bucket, key, processing_start)
     if result is None:
         return {"processed": False, "reason": "BATCH_NOT_READY_OR_ALREADY_SENT"}
