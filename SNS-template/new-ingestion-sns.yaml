@@ -1,6 +1,6 @@
 ---
 AWSTemplateFormatVersion: "2010-09-09"
-Description: Test template for SNS topic creation and subscription.
+Description: Template for SNS Ingestion failure topic creation and subscription.
 
 Parameters:
   Env:
@@ -20,28 +20,64 @@ Mappings:
       EmailAddress1: abimbolaabiodun6@gmail.com
 
 Resources:
-  TestFailureSNSTopic:
+  IngestionFailureSNSKey:
+    Type: AWS::KMS::Key
+    Properties:
+      Description: !Sub KMS key for the ingestion failure alerts SNS topic ${Env}
+      EnableKeyRotation: true
+      KeyPolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowAccountAdministration
+            Effect: Allow
+            Principal:
+              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
+            Action: kms:*
+            Resource: "*"
+          - Sid: AllowCloudWatchAlarmsToPublish
+            Effect: Allow
+            Principal:
+              Service: cloudwatch.amazonaws.com
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+          - Sid: AllowAccountPublishersThroughSNS
+            Effect: Allow
+            Principal:
+              AWS: "*"
+            Action:
+              - kms:Decrypt
+              - kms:GenerateDataKey*
+            Resource: "*"
+            Condition:
+              StringEquals:
+                kms:CallerAccount: !Ref AWS::AccountId
+                kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
+
+  IngestionFailureSNSTopic:
     Type: AWS::SNS::Topic
     Properties:
-      TopicName: !Sub test-ingestion-failure-alerts-${Env}
-      DisplayName: !Sub Test Ingestion Failure Alerts ${Env}
+      TopicName: !Sub project-hie-analytics-ingestion-failure-alerts-${Env}
+      DisplayName: !Sub Ingestion Failure Alerts ${Env}
+      KmsMasterKeyId: !Ref IngestionFailureSNSKey
     
-  TestFailureEmailSubscription1:
+  IngestionFailureEmailSubscription1:
     Type: AWS::SNS::Subscription
     Properties:
-      TopicArn: !Ref TestFailureSNSTopic
+      TopicArn: !Ref IngestionFailureSNSTopic
       Protocol: email
       Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress1]
   
 Outputs:
-  TestSNSTopicArn:
-    Description: "ARN of the SNS topic for test ingestion failure alerts"
-    Value: !Ref TestFailureSNSTopic
+  IngestionFailureSNSTopicArn:
+    Description: "ARN of the SNS topic for ingestion failure alerts"
+    Value: !Ref IngestionFailureSNSTopic
     Export: 
-      Name: !Sub test-ingestion-failure-alerts-sns-topic-arn-${Env}
+      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
     
-  TestSNSTopicName:
-    Description: "Name of the SNS topic for test ingestion failure alerts"
-    Value: !GetAtt TestFailureSNSTopic.TopicName
+  IngestionFailureSNSTopicName:
+    Description: "Name of the SNS topic for ingestion failure alerts"
+    Value: !GetAtt IngestionFailureSNSTopic.TopicName
     Export: 
-      Name: !Sub test-ingestion-failure-alerts-sns-topic-name-${Env}
+      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-name-${Env}
