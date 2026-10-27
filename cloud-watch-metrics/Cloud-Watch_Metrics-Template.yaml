@@ -12,10 +12,6 @@ Parameters:
     Type: String
     Default: /aws/transfer/s-4603e09e711e4cfa8
     Description: CloudWatch log group of the AWS Transfer Family (SFTP) server
-  FileProcessingFailurePattern:
-    Type: String
-    Default: '?BadZipFile ?"Bad CRC-32" ?"Error -3 while decompressing"'
-    Description: CloudWatch Logs filter pattern that matches the Extractor lambda
 
 Conditions:
   IsGovCloud: !Equals
@@ -137,19 +133,6 @@ Resources:
       AlarmActions:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
- 
-
-  PartnerLoginFailuresMetricFilter:
-    Type: AWS::Logs::MetricFilter
-    Properties:
-      LogGroupName: !Ref TransferLogGroupName
-      FilterPattern: '"AUTH_FAILURE"'
-      MetricTransformations:
-        - MetricNamespace: HIE/OperationalMonitoring
-          MetricName: PartnerLoginFailures
-          MetricValue: '1'
-          DefaultValue: 0
-          Unit: Count
 
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
@@ -233,26 +216,6 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
-  FileProcessingFailuresMetricFilter:
-    Type: AWS::Logs::MetricFilter
-    Properties:
-      LogGroupName: !Join
-        - ''
-        - - /aws/lambda/
-          - !Select
-            - 6
-            - !Split
-              - ':'
-              - !ImportValue
-                Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
-      FilterPattern: !Ref FileProcessingFailurePattern
-      MetricTransformations:
-        - MetricNamespace: HIE/OperationalMonitoring
-          MetricName: FileProcessingFailures
-          MetricValue: '1'
-          DefaultValue: 0
-          Unit: Count
- 
 
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
