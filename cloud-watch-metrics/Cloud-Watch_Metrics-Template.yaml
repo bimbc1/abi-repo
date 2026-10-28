@@ -472,7 +472,7 @@ Resources:
                 "label": "Partner",
                 "visible": true,
                 "search": "{HIE/OperationalMonitoring,PartnerId,PartnerLabel,PartnerName} MetricName=\"S3ObjectArrivals\"",
-                "populateFrom": "PartnerLabel",
+                "populateFrom": "PartnerName",
                 "defaultValue": "All"
               },
               {
@@ -1426,7 +1426,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,PartnerLabel,PartnerName} MetricName=\"S3ObjectArrivals\" PartnerLabel=\"__PARTNER__\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,PartnerLabel,PartnerName} MetricName=\"S3ObjectArrivals\" PartnerName=\"__PARTNER__\"', 'Sum', 300)",
                         "id": "sa",
                         "visible": false
                       }
