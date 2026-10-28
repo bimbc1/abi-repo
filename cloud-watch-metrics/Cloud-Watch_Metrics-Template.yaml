@@ -130,6 +130,148 @@ Resources:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
+  TablesGeneratorErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TablesGenerator-LambdaErrors
+      AlarmDescription: Fires when the Tables Generator Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  DatabaseProcessorErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: DatabaseProcessor-LambdaErrors
+      AlarmDescription: Fires when the Database Processor Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  CCDAExtractionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CCDAExtraction-LambdaErrors
+      AlarmDescription: Fires when the CCDA Extraction Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  PayloadMonitoringErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: PayloadMonitoring-LambdaErrors
+      AlarmDescription: Fires when the Payload Monitoring Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSAvailabilityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-Availability
+      AlarmDescription: Fires when the RDS database CPU is 80% or higher, or when
+        the database stops reporting metrics (database down).
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  DatabaseProcessorDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: DatabaseProcessor-DLQMessages
+      AlarmDescription: Fires when a message lands in the Database Processor dead-letter queue.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-dlq-name-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
     Properties:
@@ -290,7 +432,7 @@ Resources:
                 "x": 0,
                 "y": 2,
                 "width": 24,
-                "height": 2,
+                "height": 3,
                 "properties": {
                   "title": "Operational Monitoring Status",
                   "alarms": [
@@ -299,14 +441,20 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ProcessingDelay"
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ProcessingDelay",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TablesGenerator-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:CCDAExtraction-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:PayloadMonitoring-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-Availability",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages"
                   ]
                 }
               },
               {
                 "type": "text",
                 "x": 0,
-                "y": 4,
+                "y": 5,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -316,7 +464,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 5,
+                "y": 6,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -421,7 +569,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 11,
+                "y": 12,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -446,7 +594,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 17,
+                "y": 18,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -456,7 +604,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 18,
+                "y": 19,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -488,7 +636,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 18,
+                "y": 19,
                 "width": 16,
                 "height": 6,
                 "properties": {
@@ -519,7 +667,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 24,
+                "y": 25,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -529,7 +677,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 25,
+                "y": 26,
                 "width": 24,
                 "height": 2,
                 "properties": {
@@ -539,7 +687,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 27,
+                "y": 28,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -618,7 +766,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 6,
-                "y": 27,
+                "y": 28,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -697,7 +845,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 27,
+                "y": 28,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -776,7 +924,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 33,
+                "y": 34,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -786,7 +934,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 34,
+                "y": 35,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -855,7 +1003,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 34,
+                "y": 35,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -912,7 +1060,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 34,
+                "y": 35,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -969,7 +1117,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 40,
+                "y": 41,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1026,7 +1174,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 40,
+                "y": 41,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1048,7 +1196,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 46,
+                "y": 47,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1058,7 +1206,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 47,
+                "y": 48,
                 "width": 24,
                 "height": 3,
                 "properties": {
@@ -1068,7 +1216,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 50,
+                "y": 51,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1078,7 +1226,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 51,
+                "y": 52,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1101,7 +1249,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 51,
+                "y": 52,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -1121,7 +1269,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 57,
+                "y": 58,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1131,7 +1279,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 58,
+                "y": 59,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1171,7 +1319,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 64,
+                "y": 65,
                 "width": 24,
                 "height": 6,
                 "properties": {
