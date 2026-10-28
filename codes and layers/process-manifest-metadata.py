@@ -273,10 +273,8 @@ def is_batch_already_sent(bucket, manifest_key):
     # --- CUSTOM EXCEPTIONS ---
 class DatabaseConnectionError(RuntimeError):
     """Raised when there is an error connecting to the database."""
-pass
 class SQSPublishError(RuntimeError):
     """Raised when there is an error publishing to the SQS queue."""
-pass
     # --- CRUD OPERATION TRACKING ---
     # Every SQL statement goes through execute_crud(), which records whether it
     # is a Create (INSERT), Read (SELECT), Update (UPDATE) or Delete (DELETE).
