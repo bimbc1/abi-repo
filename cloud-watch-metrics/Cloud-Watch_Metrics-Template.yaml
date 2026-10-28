@@ -938,7 +938,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Retries by failure type - Manifest Metadata Lambda",
+                  "title": "Database connection attempts - Manifest Metadata Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -961,18 +961,6 @@ Resources:
                       {
                         "label": "Database connection",
                         "color": "#d13212"
-                      }
-                    ],
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "SQSPublishFailure",
-                      {
-                        "label": "SQS publish",
-                        "color": "#ff7f0e"
                       }
                     ]
                   ],
@@ -1007,7 +995,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Retries by failure type - Database Processor Lambda",
+                  "title": "Database connection attempts - Database Processor Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -1064,7 +1052,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Retries by failure type - CCDA Extraction Lambda",
+                  "title": "Database connection attempts - CCDA Extraction Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -1121,7 +1109,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Retries by failure type - Monitoring Lambda",
+                  "title": "Database connection attempts - Monitoring Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -1191,6 +1179,63 @@ Resources:
                       "${DlqName}"
                     ]
                   ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 41,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "SQS publish attempts - Manifest Metadata Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#ff7f0e"
+                      }
+                    ]
+                  ],
+                  "annotations": {
+                    "horizontal": [
+                      {
+                        "color": "#2ca02c",
+                        "label": "OK",
+                        "value": 0,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#ff7f0e",
+                        "label": "Warning",
+                        "value": 1,
+                        "fill": "above"
+                      },
+                      {
+                        "color": "#d13212",
+                        "label": "Critical",
+                        "value": 3,
+                        "fill": "above"
+                      }
+                    ]
+                  }
                 }
               },
               {
