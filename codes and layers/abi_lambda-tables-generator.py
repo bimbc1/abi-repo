@@ -277,7 +277,7 @@ def ensure_tables(cur):
             partner_id UUID NOT NULL,
             failure_type TEXT,
             last_alert_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-            expected_interval_seconds INTEGER NOT NULL,
+            expected_interval_seconds INTEGER,
             grace_seconds INTEGER,
             breach_flag BOOLEAN DEFAULT FALSE,
             last_breach_email_sent_at TIMESTAMPTZ,
@@ -291,6 +291,10 @@ def ensure_tables(cur):
     cur.execute("""
         ALTER TABLE partner_schedule
         DROP COLUMN IF EXISTS timezone;
+    """)
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        ALTER COLUMN expected_interval_seconds DROP NOT NULL;
     """)
     # ---ADDING EXPECTED_FILES_PER_TRANSMISSION TO EXISTING PARTNER_SCHEDULE TABLES---
     # New tables already get this column from the CREATE above. This ALTER is
