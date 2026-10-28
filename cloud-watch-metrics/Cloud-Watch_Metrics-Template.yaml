@@ -1425,9 +1425,16 @@ Resources:
                   "stat": "Sum",
                   "metrics": [
                     [
-                      "HIE/OperationalMonitoring",
-                      "S3ObjectArrivals",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,PartnerLabel,PartnerName} MetricName=\"S3ObjectArrivals\" PartnerLabel=\"__PARTNER__\"', 'Sum', 300)",
+                        "id": "sa",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(sa)",
+                        "id": "sat",
                         "label": "S3ObjectArrivals"
                       }
                     ]
