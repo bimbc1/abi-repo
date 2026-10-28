@@ -276,6 +276,103 @@ Resources:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
+  TransferFamilyUploadFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TransferFamily-UploadFailures
+      AlarmDescription: Fires when a file upload to the Transfer Family server fails (PARTIAL_CLOSE).
+      Namespace: HIE/OperationalMonitoring
+      MetricName: UploadFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  MetadataProcessingQueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MetadataProcessingQueue-OldestMessageAge
+      AlarmDescription: Fires when the oldest message in the metadata processing queue has waited 15 minutes (900 seconds) or longer.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub project-hie-analytics-metadata-processing-queue-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 900
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSDatabaseConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-DatabaseConnections
+      AlarmDescription: Fires when the RDS database has 80 or more open connections.
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSFreeStorageSpaceAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-FreeStorageSpace
+      AlarmDescription: Fires when the RDS database has less than 2 GB of free storage space.
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2147483648
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSFreeableMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-FreeableMemory
+      AlarmDescription: Fires when the RDS database has less than 256 MB of freeable memory.
+      Namespace: AWS/RDS
+      MetricName: FreeableMemory
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 268435456
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
     Properties:
@@ -416,7 +513,7 @@ Resources:
                 "x": 0,
                 "y": 2,
                 "width": 24,
-                "height": 3,
+                "height": 4,
                 "properties": {
                   "title": "Operational Monitoring Status",
                   "alarms": [
@@ -431,14 +528,19 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:CCDAExtraction-LambdaErrors",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:PayloadMonitoring-LambdaErrors",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-Availability",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages"
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TransferFamily-UploadFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MetadataProcessingQueue-OldestMessageAge",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-DatabaseConnections",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory"
                   ]
                 }
               },
               {
                 "type": "text",
                 "x": 0,
-                "y": 5,
+                "y": 6,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -448,7 +550,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 6,
+                "y": 7,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -553,7 +655,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 12,
+                "y": 13,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -578,7 +680,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 18,
+                "y": 19,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -588,7 +690,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 19,
+                "y": 20,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -620,7 +722,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 19,
+                "y": 20,
                 "width": 16,
                 "height": 6,
                 "properties": {
@@ -651,7 +753,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 25,
+                "y": 26,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -661,7 +763,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 26,
+                "y": 27,
                 "width": 24,
                 "height": 2,
                 "properties": {
@@ -671,7 +773,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 28,
+                "y": 29,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -750,7 +852,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 6,
-                "y": 28,
+                "y": 29,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -829,7 +931,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 12,
-                "y": 28,
+                "y": 29,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -908,7 +1010,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 34,
+                "y": 35,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -918,7 +1020,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 35,
+                "y": 36,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -975,7 +1077,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 35,
+                "y": 36,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1032,7 +1134,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 35,
+                "y": 36,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1089,7 +1191,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 41,
+                "y": 42,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1146,7 +1248,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 8,
-                "y": 41,
+                "y": 42,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1168,7 +1270,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 41,
+                "y": 42,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1225,7 +1327,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 47,
+                "y": 48,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1282,7 +1384,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 53,
+                "y": 54,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1292,7 +1394,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 54,
+                "y": 55,
                 "width": 24,
                 "height": 3,
                 "properties": {
@@ -1302,7 +1404,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 57,
+                "y": 58,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1312,7 +1414,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 58,
+                "y": 59,
                 "width": 8,
                 "height": 6,
                 "properties": {
@@ -1335,7 +1437,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 16,
-                "y": 58,
+                "y": 59,
                 "width": 6,
                 "height": 6,
                 "properties": {
@@ -1355,7 +1457,7 @@ Resources:
               {
                 "type": "text",
                 "x": 0,
-                "y": 64,
+                "y": 65,
                 "width": 24,
                 "height": 1,
                 "properties": {
@@ -1365,7 +1467,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 65,
+                "y": 66,
                 "width": 24,
                 "height": 6,
                 "properties": {
@@ -1405,7 +1507,7 @@ Resources:
               {
                 "type": "metric",
                 "x": 0,
-                "y": 71,
+                "y": 72,
                 "width": 24,
                 "height": 6,
                 "properties": {
