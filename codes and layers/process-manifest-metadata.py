@@ -1323,14 +1323,14 @@ def process_object(bucket, key, record):
         unit="Seconds"
     )
     logger.info("Processing delay=%s seconds", processing_delay)
+    if not is_target_file(filename):
+        logger.info("Skipping non-target file: %s", filename)
+        return {"processed": False, "reason": "NON_TARGET_FILE"}
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="S3ObjectArrivals",
         value=1
     )
-    if not is_target_file(filename):
-        logger.info("Skipping non-target file: %s", filename)
-        return {"processed": False, "reason": "NON_TARGET_FILE"}
     # ---S3 OBJECT ARRIVALS PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
     arrival_partner_name = get_partner_name_for_bucket(bucket)
     for _pname in ([arrival_partner_name, "All"] if arrival_partner_name else ["All"]):
