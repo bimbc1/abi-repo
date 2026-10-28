@@ -8,6 +8,10 @@ Parameters:
       - dev
       - stg
       - prod
+  TransferServerId:
+    Type: String
+    Default: s-4603e09e711e4cfa8
+    Description: ID of the existing AWS Transfer Family server.
 
 Conditions:
   IsGovCloud: !Equals
@@ -275,11 +279,7 @@ Resources:
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
     Properties:
-      LogGroupIdentifier: !Join
-        - ''
-        - - /aws/transfer/
-          - !ImportValue
-            Fn::Sub: transfer-server-id-${Env}
+      LogGroupIdentifier: !Sub /aws/transfer/${TransferServerId}
       TransformerConfig:
         - Grok:
             Match: '%{NOTSPACE:stream} %{NOTSPACE:activity} %{GREEDYDATA:details}'
@@ -302,11 +302,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     DependsOn: TransferLogTransformer
     Properties:
-      LogGroupName: !Join
-        - ''
-        - - /aws/transfer/
-          - !ImportValue
-            Fn::Sub: transfer-server-id-${Env}
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
       ApplyOnTransformedLogs: true
       FilterPattern: '{ ($.activity = "CONNECTED") && ($.tfuser = "*") }'
       MetricTransformations:
@@ -322,11 +318,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     DependsOn: TransferLogTransformer
     Properties:
-      LogGroupName: !Join
-        - ''
-        - - /aws/transfer/
-          - !ImportValue
-            Fn::Sub: transfer-server-id-${Env}
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
       ApplyOnTransformedLogs: true
       FilterPattern: '{ $.activity = "AUTH_FAILURE" }'
       MetricTransformations:
@@ -342,11 +334,7 @@ Resources:
     Type: AWS::Logs::MetricFilter
     DependsOn: TransferLogTransformer
     Properties:
-      LogGroupName: !Join
-        - ''
-        - - /aws/transfer/
-          - !ImportValue
-            Fn::Sub: transfer-server-id-${Env}
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
       ApplyOnTransformedLogs: true
       FilterPattern: '{ ($.activity = "CLOSE") && ($.BytesIn = "*") }'
       MetricTransformations:
@@ -361,11 +349,7 @@ Resources:
   UploadFailuresMetricFilter:
     Type: AWS::Logs::MetricFilter
     Properties:
-      LogGroupName: !Join
-        - ''
-        - - /aws/transfer/
-          - !ImportValue
-            Fn::Sub: transfer-server-id-${Env}
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
       FilterPattern: '"PARTIAL_CLOSE"'
       MetricTransformations:
         - MetricNamespace: HIE/OperationalMonitoring
