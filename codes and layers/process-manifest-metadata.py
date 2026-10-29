@@ -395,7 +395,7 @@ def notify_database_connection_failure(failure_category, error_message, context=
             f"Database host: {DB_HOST}\n"
             f"Error type: {type(error_message).__name__}\n"
             f"Error message: {str(error_message)}\n"
-            "Requested action: Check Aurora database connectivity and credentials.\n"
+            "Requested action: Check Aurora database connectivity, credentials, "
             "security groups, VPC settings, and database availability.\n"
         )
     return _publish_operational_alert(
@@ -432,11 +432,11 @@ def notify_sqs_publish_failure(error, context=None):
             f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
             f"AWS Region: {AWS_REGION}\n"
             f"Lambda request ID: {request_id}\n"
-            f"Database host: {DB_HOST}\n"
+            f"Queue URL: {METADATA_QUEUE_URL}\n"
             f"Error type: {type(error).__name__}\n"
             f"Error message: {str(error)}\n"
-            "Requested action: Check Aurora database connectivity and credentials.\n"
-            "security groups, VPC settings, and database availability.\n"
+            "Requested action: Check that the queue URL is correct, the Lambda role "
+            "has sqs:SendMessage permission on the queue, and the queue exists and is available.\n"
         )
     return _publish_operational_alert(
         subject=f"CRITICAL: Manifest processing failed due to SQS publish error",
