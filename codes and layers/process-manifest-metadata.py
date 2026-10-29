@@ -42,7 +42,6 @@ SNS_SUBJECT_TEMPLATE = os.environ.get(
     "SNS_SUBJECT_TEMPLATE",
     "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
 )
-DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400
 ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
@@ -675,13 +674,12 @@ def clear_breach_flag(cur, partner_id):
             INSERT INTO partner_schedule(
                 partner_id,
                 breach_flag,
-                expected_interval_seconds,
                 last_alert_at,
                 updated_at
             )
-            VALUES (%s, FALSE, %s, NOW(), NOW())
+            VALUES (%s, FALSE, NOW(), NOW())
             """,
-            (partner_id, DEFAULT_EXPECTED_INTERVAL_SECONDS),
+            (partner_id,),
         )
         logger.info(
             "No partner_schedule row existed for partner_id=%s -- created one "
