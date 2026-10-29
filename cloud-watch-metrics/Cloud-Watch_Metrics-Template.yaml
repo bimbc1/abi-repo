@@ -237,7 +237,7 @@ Resources:
   RDSAvailabilityAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: RDS-Availability
+      AlarmName: RDS-CPUUtilization
       AlarmDescription: Fires when the RDS database CPU is 80% or higher, or when
         the database stops reporting metrics (database down).
       Namespace: AWS/RDS
@@ -527,7 +527,7 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-LambdaErrors",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:CCDAExtraction-LambdaErrors",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:PayloadMonitoring-LambdaErrors",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-Availability",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-CPUUtilization",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TransferFamily-UploadFailures",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MetadataProcessingQueue-OldestMessageAge",
