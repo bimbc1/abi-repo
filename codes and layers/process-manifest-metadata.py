@@ -42,6 +42,7 @@ SNS_SUBJECT_TEMPLATE = os.environ.get(
     "SNS_SUBJECT_TEMPLATE",
     "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
 )
+DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400
 ALERT_COOLDOWN_SECONDS = int(
     os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
 )
@@ -674,12 +675,13 @@ def clear_breach_flag(cur, partner_id):
             INSERT INTO partner_schedule(
                 partner_id,
                 breach_flag,
+                expected_interval_seconds,
                 last_alert_at,
                 updated_at
             )
-            VALUES (%s, FALSE, NOW(), NOW())
+            VALUES (%s, FALSE, %s, NOW(), NOW())
             """,
-            (partner_id,),
+            (partner_id, DEFAULT_EXPECTED_INTERVAL_SECONDS),
         )
         logger.info(
             "No partner_schedule row existed for partner_id=%s -- created one "
@@ -996,19 +998,6 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "files_in": report_actual_count
         }
     }
-    # --- PARTNER SCHEDULE LEARNING SUPPORT ---
-def get_partner_sample_count(cur, partner_id):
-    execute_crud(
-        cur,
-        """
-        SELECT COUNT(*)
-        FROM manifest_batch
-        WHERE partner_id = %s
-        """,
-        (partner_id,),
-    )
-    row = cur.fetchone()
-    return row[0] if row else 0
     # --- PARTNER STATE AND BREACH SYNCHRONIZATION ---
 def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start):
     conn = None
