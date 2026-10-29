@@ -364,10 +364,10 @@ def _publish_operational_alert(subject, message, failure_category):
             exc_info=True,
         )
         return False
-def notify_database_connection_failure(failure_category, error_message):
+def notify_database_connection_failure(failure_category, error_message, context=None):
     request_id = (
-        getattr(globals().get("context"), "aws_request_id", None)
-        if globals().get("context")
+        getattr(context, "aws_request_id", None)
+        if context
         else None
     )
     if FAILURE_MESSAGE_TYPE:
@@ -445,7 +445,7 @@ def notify_sqs_publish_failure(error, context=None):
     )
 def route_critical_failure_notification(error, context=None):
     if isinstance(error, DatabaseConnectionError):
-        return notify_database_connection_failure("Database Connection Failure", error)
+        return notify_database_connection_failure("Database Connection Failure", error, context)
     if isinstance(error, SQSPublishError):
         return notify_sqs_publish_failure(error, context)
     logging.debug(
@@ -1433,7 +1433,7 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
-            route_critical_failure_notification(e, record)
+            route_critical_failure_notification(e, context)
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
