@@ -5,19 +5,29 @@ Description: Template for SNS Ingestion failure topic creation and subscription.
 Parameters:
   Env:
     Type: String
-    AllowedValues: 
+    AllowedValues:
       - dev
       - stg
       - prod
 
-Mappings:
-  EnvConfig:
-    dev:
-      EmailAddress1: abimbolaabiodun6@gmail.com
-    stg:
-      EmailAddress1: abimbolaabiodun6@gmail.com
-    prod:
-      EmailAddress1: abimbolaabiodun6@gmail.com
+  EmailAddress1:
+    Type: String
+    MinLength: 1
+    Description: First email address to receive ingestion failure alerts.
+
+  EmailAddress2:
+    Type: String
+    Default: ""
+    Description: Second email address to receive ingestion failure alerts.
+
+  EmailAddress3:
+    Type: String
+    Default: ""
+    Description: Third email address to receive ingestion failure alerts.
+
+Conditions:
+  HasEmailAddress2: !Not [!Equals [!Ref EmailAddress2, ""]]
+  HasEmailAddress3: !Not [!Equals [!Ref EmailAddress3, ""]]
 
 Resources:
   IngestionFailureSNSKey:
@@ -61,23 +71,39 @@ Resources:
       TopicName: !Sub project-hie-analytics-ingestion-failure-alerts-${Env}
       DisplayName: !Sub Ingestion Failure Alerts ${Env}
       KmsMasterKeyId: !Ref IngestionFailureSNSKey
-    
+
   IngestionFailureEmailSubscription1:
     Type: AWS::SNS::Subscription
     Properties:
       TopicArn: !Ref IngestionFailureSNSTopic
       Protocol: email
-      Endpoint: !FindInMap [EnvConfig, !Ref Env, EmailAddress1]
-  
+      Endpoint: !Ref EmailAddress1
+
+  IngestionFailureEmailSubscription2:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmailAddress2
+    Properties:
+      TopicArn: !Ref IngestionFailureSNSTopic
+      Protocol: email
+      Endpoint: !Ref EmailAddress2
+
+  IngestionFailureEmailSubscription3:
+    Type: AWS::SNS::Subscription
+    Condition: HasEmailAddress3
+    Properties:
+      TopicArn: !Ref IngestionFailureSNSTopic
+      Protocol: email
+      Endpoint: !Ref EmailAddress3
+
 Outputs:
   IngestionFailureSNSTopicArn:
     Description: "ARN of the SNS topic for ingestion failure alerts"
     Value: !Ref IngestionFailureSNSTopic
-    Export: 
+    Export:
       Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
-    
+
   IngestionFailureSNSTopicName:
     Description: "Name of the SNS topic for ingestion failure alerts"
     Value: !GetAtt IngestionFailureSNSTopic.TopicName
-    Export: 
+    Export:
       Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-name-${Env}
