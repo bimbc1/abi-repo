@@ -135,6 +135,7 @@ Resources:
             Fn::Sub: project-hie-analytics-RDSDBEndpointAddress-${Env}
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
+          ENVIRONMENT: !Ref Env
           METADATA_QUEUE_URL: !ImportValue
             Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
           OPERATIONAL_SNS_TOPIC_ARN: !ImportValue
