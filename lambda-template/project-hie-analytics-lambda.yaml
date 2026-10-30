@@ -146,7 +146,7 @@ Resources:
           SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
          
           RESUMED_MESSAGE_TEMPLATE: |
-            {partner_name} file delivery has resumed and files are being received successfully.
+            {partner_name} file delivery has resumed and files are being received successfully
 
           WARNING_INFO: "WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
           
