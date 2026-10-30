@@ -55,6 +55,8 @@ DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME             = os.environ.get("DB_NAME", "ccda01")
 INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
 FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+DASHBOARD_NAME      = os.environ.get("DASHBOARD_NAME")
+_dropdown_checked   = {"at": None}
     # --AWS CLIENTS---
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
@@ -567,6 +569,50 @@ def get_registered_partner_count():
         if conn:
             conn.close()
     return _registered_partner_count["value"]
+    # ---KEEP THE DASHBOARD PARTNER DROPDOWN IN SYNC WITH THE DATABASE (checked at most every 15 min)---
+def update_partner_dropdown():
+    if not DASHBOARD_NAME:
+        return
+    now = datetime.now(timezone.utc)
+    checked_at = _dropdown_checked["at"]
+    if checked_at and (now - checked_at).total_seconds() < 900:
+        return
+    conn = None
+    try:
+        conn = get_conn(publish_failure_metric=False)
+        with conn.cursor() as cur:
+            execute_crud(
+                cur,
+                """
+                SELECT DISTINCT ON (r.partner_id) r.partner_id, c.partner_name
+                FROM partner_registry r
+                LEFT JOIN partner_contact_details c ON c.partner_id = r.partner_id
+                ORDER BY r.partner_id
+                """
+            )
+            rows = cur.fetchall()
+        partners = sorted(
+            ({"value": str(pid), "label": name or f"Partner {pid}"} for pid, name in rows),
+            key=lambda p: p["label"].lower()
+        )
+        new_values = [{"value": "All", "label": "All"}] + partners
+        body = json.loads(cloudwatch.get_dashboard(DashboardName=DASHBOARD_NAME)["DashboardBody"])
+        changed = False
+        for variable in body.get("variables", []):
+            if variable.get("id") == "partner" and variable.get("values") != new_values:
+                variable["values"] = new_values
+                variable.pop("search", None)
+                variable.pop("populateFrom", None)
+                changed = True
+        if changed:
+            cloudwatch.put_dashboard(DashboardName=DASHBOARD_NAME, DashboardBody=json.dumps(body))
+            logger.info("Partner dropdown updated with %d partner(s).", len(partners))
+        _dropdown_checked["at"] = now
+    except Exception as e:
+        logger.warning("Could not update partner dropdown: %s", e)
+    finally:
+        if conn:
+            conn.close()
     # --- PARTNER TRANSMISSION STATE TRACKING ---
 def update_partner_state(cur, partner_id, object_key, partner_name=None):
     now = datetime.now(timezone.utc)
@@ -636,25 +682,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
         schedule_row = cur.fetchone()
         expected_interval_seconds = schedule_row[0] if schedule_row else None
         if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
-            put_metric(
-                namespace="HIE/PartnerMonitoring",
-                metric_name="StaleConnection",
-                value=1,
-                unit="Count",
-                dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
-            )
-            # ---STALE CONNECTION PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
-            for _pid, _pname in ((str(partner_id), str(partner_name)), ("All", "All")):
-                put_metric(
-                    namespace="HIE/PartnerMonitoring",
-                    metric_name="StaleConnection",
-                    value=1,
-                    unit="Count",
-                    dimensions=[
-                        {"Name": "PartnerId", "Value": _pid},
-                        {"Name": "PartnerName", "Value": _pname}
-                    ]
-                )
+            # ---STALE CONNECTION PER PARTNER ID + "All"---
+            put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
     # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id):
     execute_crud(
@@ -1029,7 +1058,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         except Exception as count_error:
             logger.warning("Could not count partners not in breach: %s", count_error)
             if isinstance(count_error, psycopg2.Error):
-                put_failure_metric("CRUDFailureEvents", "Read", partner_name)
+                put_failure_metric("CRUDFailureEvents", "Read", partner_id)
     except Exception as e:
         if conn:
             conn.rollback()
@@ -1051,14 +1080,8 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             type(e).__name__,
             batch_id,
         )
-        put_failure_metric("CRUDFailureEvents", crud_failure_type, partner_name)
-        put_metric(
-            namespace="HIE/PartnerMonitoring",
-            metric_name="Errors",
-            value=1,
-            unit="Count",
-            dimensions=[{"Name": "PartnerName", "Value": partner_name or "Unknown"}]
-        )
+        put_failure_metric("CRUDFailureEvents", crud_failure_type, partner_id)
+        put_partner_metric("HIE/PartnerMonitoring", "Errors", partner_id, 1)
         logger.exception(
             "Partner-state/breach-flag sync failed for bucket=%s batch_id=%s",
             bucket,
@@ -1086,30 +1109,22 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             conn.close()
     if breach_cleared:
         send_recovery_sns(partner_name, partner_id, environment)
+    put_partner_metric("HIE/PartnerMonitoring", "PartnerRecovered", partner_id, 1 if breach_cleared else 0)
+    # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
+    # Sent per PartnerId and as "All" (value = number of registered partners not in breach).
+    all_not_in_breach = not_in_breach_count if not_in_breach_count is not None else 1
+    put_partner_metric("HIE/PartnerMonitoring", "PartnerNotInBreach", partner_id, 1, all_value=all_not_in_breach)
+    # Kept only so the dashboard "Transfer Family user" dropdown keeps its "All" option.
     put_metric(
         namespace="HIE/PartnerMonitoring",
-        metric_name="PartnerRecovered",
-        value=1 if breach_cleared else 0,
+        metric_name="PartnerNotInBreach",
+        value=all_not_in_breach,
         unit="Count",
-        dimensions=[{"Name": "PartnerName", "Value": partner_name}]
+        dimensions=[
+            {"Name": "PartnerName", "Value": "All"},
+            {"Name": "PartnerId", "Value": "All"}
+        ]
     )
-    # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
-    # Also sent as "All" (value = number of registered partners not in breach) so the
-    # dashboard Partner dropdown lists "All" and shows the total for all partners.
-    for _pid, _pname, _value in (
-        (str(partner_id), str(partner_name), 1),
-        ("All", "All", not_in_breach_count if not_in_breach_count is not None else 1),
-    ):
-        put_metric(
-            namespace="HIE/PartnerMonitoring",
-            metric_name="PartnerNotInBreach",
-            value=_value,
-            unit="Count",
-            dimensions=[
-                {"Name": "PartnerName", "Value": _pname},
-                {"Name": "PartnerId", "Value": _pid}
-            ]
-        )
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
@@ -1237,25 +1252,23 @@ def send_metadata_to_sqs(message):
         value=message["metrics"]["bytes_in"],
         unit="Bytes"
     )
-    partner_name = message.get("partner", {}).get("partner_name")
-    if partner_name:
+    partner_id = message.get("partner", {}).get("partner_id")
+    if partner_id is not None:
         put_metric(
             namespace="HIE/PartnerMonitoring",
             metric_name="BytesIn",
             value=message["metrics"]["bytes_in"],
             unit="Bytes",
-            dimensions=[{"Name": "PartnerName", "Value": partner_name}]
+            dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
         )
         if message["message_type"] == "PATIENT_REPORT_METADATA_UPSERT":
-            # ---FILES IN/OUT PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
-            for _pname in (partner_name, "All"):
-                put_metric(
-                    namespace="HIE/PartnerMonitoring",
-                    metric_name="FilesOut" if message.get("direction") == "outbound" else "FilesIn",
-                    value=message["metrics"].get("files_in", 0),
-                    unit="Count",
-                    dimensions=[{"Name": "PartnerName", "Value": _pname}]
-                )
+            # ---FILES IN/OUT PER PARTNER ID + "All"---
+            put_partner_metric(
+                "HIE/PartnerMonitoring",
+                "FilesOut" if message.get("direction") == "outbound" else "FilesIn",
+                partner_id,
+                message["metrics"].get("files_in", 0)
+            )
     return response
     # ---CLOUDWATCH METRICS---
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
@@ -1273,7 +1286,25 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
         )
     except Exception as e:
         logger.warning("Failed to publish metric %s: %s", metric_name, e)
-def put_failure_metric(metric_name, failure_type=None, partner_name=None):
+def put_partner_metric(namespace, metric_name, partner_id, value, all_value=None, unit="Count", extra_dimensions=None):
+    """Publish a per-partner metric keyed by PartnerId only, plus the "All" total."""
+    extra = extra_dimensions or []
+    if partner_id is not None:
+        put_metric(
+            namespace=namespace,
+            metric_name=metric_name,
+            value=value,
+            unit=unit,
+            dimensions=extra + [{"Name": "PartnerId", "Value": str(partner_id)}]
+        )
+    put_metric(
+        namespace=namespace,
+        metric_name=metric_name,
+        value=value if all_value is None else all_value,
+        unit=unit,
+        dimensions=extra + [{"Name": "PartnerId", "Value": "All"}]
+    )
+def put_failure_metric(metric_name, failure_type=None, partner_id=None):
     """Publish a failure metric tagged with this Lambda's name and failure type."""
     dimensions = [{"Name": "FunctionName", "Value": FUNCTION_NAME}]
     if failure_type:
@@ -1284,15 +1315,9 @@ def put_failure_metric(metric_name, failure_type=None, partner_name=None):
         value=1,
         dimensions=dimensions
     )
-    # ---CRUD FAILURES PER PARTNER (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
+    # ---CRUD FAILURES PER PARTNER ID (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
     if metric_name == "CRUDFailureEvents":
-        for _pname in ([partner_name, "All"] if partner_name else ["All"]):
-            put_metric(
-                namespace="HIE/OperationalMonitoring",
-                metric_name=metric_name,
-                value=1,
-                dimensions=dimensions + [{"Name": "PartnerName", "Value": _pname}]
-            )
+        put_partner_metric("HIE/OperationalMonitoring", metric_name, partner_id, 1, extra_dimensions=dimensions)
     # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
@@ -1316,37 +1341,19 @@ def process_object(bucket, key, record):
         metric_name="S3ObjectArrivals",
         value=1
     )
-    # ---S3 OBJECT ARRIVALS PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
-    arrival_partner_name = get_partner_name_for_bucket(bucket)
-    for _pname in ([arrival_partner_name, "All"] if arrival_partner_name else ["All"]):
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="S3ObjectArrivals",
-            value=1,
-            dimensions=[{"Name": "PartnerName", "Value": _pname}]
-        )
-    # ---S3 OBJECT ARRIVALS PER PARTNER NAME + PARTNER ID (used by the dashboard Partner dropdown)---
+    # ---S3 OBJECT ARRIVALS PER PARTNER ID + "All"---
+    get_partner_name_for_bucket(bucket)
     arrival_partner_id = _bucket_partner_ids.get(bucket)
-    for _pid, _pname in ([(str(arrival_partner_id), arrival_partner_name), ("All", "All")] if arrival_partner_name and arrival_partner_id else [("All", "All")]):
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="S3ObjectArrivals",
-            value=1,
-            dimensions=[
-                {"Name": "PartnerName", "Value": _pname},
-                {"Name": "PartnerId", "Value": _pid},
-                {"Name": "PartnerLabel", "Value": _pname if _pid == "All" else f"{_pname} ({_pid})"}
-            ]
-        )
+    put_partner_metric("HIE/OperationalMonitoring", "S3ObjectArrivals", arrival_partner_id, 1)
     # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
     registered_partner_count = get_registered_partner_count()
-    for _pname, _value in ((arrival_partner_name, 1), ("All", registered_partner_count)):
-        if _pname and _value:
+    for _pid, _value in ((arrival_partner_id, 1), ("All", registered_partner_count)):
+        if _pid is not None and _value:
             put_metric(
                 namespace="HIE/OperationalMonitoring",
                 metric_name="RegisteredPartners",
                 value=_value,
-                dimensions=[{"Name": "PartnerName", "Value": _pname}]
+                dimensions=[{"Name": "PartnerId", "Value": str(_pid)}]
             )
     result = build_metadata_messages(bucket, key, processing_start)
     if result is None:
@@ -1439,6 +1446,7 @@ def lambda_handler(event, context):
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
+    update_partner_dropdown()
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="Latency",
