@@ -78,7 +78,7 @@ Resources:
 
       Code:
         S3Bucket: demo-bucket-idn
-        S3Key: lambda-tables-generator.zip
+        S3Key: lambda_tables_generator.zip
       Layers:
         - !Ref Psycopg2Layer
         - !Ref RetryHandlerLayer
@@ -121,7 +121,7 @@ Resources:
 
       Code:
         S3Bucket: demo-bucket-idn
-        S3Key: process-manifest-metadata.zip
+        S3Key: process_manifest_metadata.zip
         
       Layers:
         - !Ref Psycopg2Layer
