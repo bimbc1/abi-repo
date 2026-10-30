@@ -136,6 +136,7 @@ Resources:
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
           ENVIRONMENT: !Ref Env
+          DASHBOARD_NAME: !Ref project-hie-analytics-operational-dashboard-${Env}
           METADATA_QUEUE_URL: !ImportValue
             Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
           OPERATIONAL_SNS_TOPIC_ARN: !ImportValue
