@@ -365,6 +365,11 @@ def _publish_operational_alert(subject, message, failure_category):
             failure_category,
             exc_info=True,
         )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSPublishFailures",
+            value=1
+        )
         return False
 def notify_database_connection_failure(failure_category, error_message, context=None):
     request_id = (
@@ -781,6 +786,11 @@ def send_recovery_sns(partner_name, partner_id, environment):
         logger.exception(
             "SNS notification failed for partner_id=%s, but database changes were already committed.",
             partner_id,
+        )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSPublishFailures",
+            value=1
         )
     # ---FILE VALIDATION AND COUNTING---
 def read_manifest_expected_counts(bucket, key):
