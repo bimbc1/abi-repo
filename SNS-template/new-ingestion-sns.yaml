@@ -107,3 +107,8 @@ Outputs:
     Value: !GetAtt IngestionFailureSNSTopic.TopicName
     Export:
       Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-name-${Env}
+
+  IngestionFailureSNSKeyArn:
+    Value: !GetAtt IngestionFailureSNSKey.Arn
+    Export:
+      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-key-arn-${Env}
