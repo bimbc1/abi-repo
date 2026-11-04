@@ -373,6 +373,23 @@ Resources:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
+  SNSPublishFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-SNSPublishFailures
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails to send an alert or recovery email through SNS.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: SNSPublishFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
   TransferLogTransformer:
     Type: AWS::Logs::Transformer
     Properties:
@@ -537,7 +554,8 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MetadataProcessingQueue-OldestMessageAge",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-DatabaseConnections",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory"
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures"
                   ]
                 }
               },
