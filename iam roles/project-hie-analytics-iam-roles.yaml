@@ -140,6 +140,19 @@ Resources:
                       Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
                   - Fn::ImportValue:
                       Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
+
+        - PolicyName: !Sub project-hie-analytics-lambda-sns-kms-policy-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowUseOfSnsTopicKmsKey
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource:
+                  Fn::ImportValue:
+                    Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-key-arn-${Env}
                       
 
         - PolicyName: !Sub project-hie-analytics-lambda-invoke-notification-${Env}
