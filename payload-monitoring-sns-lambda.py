@@ -167,6 +167,17 @@ def put_partner_breach_metrics(partner_id, partner_name, in_breach):
                          dimensions=dimensions, namespace="HIE/PartnerMonitoring")
 
 
+def put_breach_event_metric(partner_id):
+    """BreachEvents per PartnerId and as "All", matching the dashboard Breach Status widget."""
+    for pid in (str(partner_id), "All"):
+        put_dashboard_metric(
+            "BreachEvents",
+            1,
+            dimensions=[{"Name": "PartnerId", "Value": pid}],
+            namespace="HIE/PartnerMonitoring",
+        )
+
+
 # ---- CRUD OPERATION TRACKING ----
 _last_crud_operation = None
 
@@ -291,6 +302,7 @@ def lambda_handler(event, context):
                 publish_partner_metric(partner_name, "PartnerInBreach", 1)
                 publish_partner_metric(partner_name, "BreachEvents", 1)
                 put_partner_breach_metrics(partner_id, partner_name, True)
+                put_breach_event_metric(partner_id)
 
                 should_send_email = False
 
