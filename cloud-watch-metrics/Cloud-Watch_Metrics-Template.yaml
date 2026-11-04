@@ -1219,41 +1219,6 @@ Resources:
                 }
               },
               {
-                "type": "metric",
-                "x": 0,
-                "y": 48,
-                "width": 8,
-                "height": 6,
-                "properties": {
-                  "title": "Failed Database Connections - Tables Generator Lambda",
-                  "region": "${AWS::Region}",
-                  "view": "gauge",
-                  "stat": "Sum",
-                  "period": 300,
-                  "setPeriodToTimeRange": true,
-                  "yAxis": {
-                    "left": {
-                      "min": 0,
-                      "max": 10
-                    }
-                  },
-                  "metrics": [
-                    [
-                      "HIE/OperationalMonitoring",
-                      "RetryEvents",
-                      "FunctionName",
-                      "${TablesGeneratorFunctionName}",
-                      "FailureType",
-                      "DatabaseConnectionFailure",
-                      {
-                        "label": "Database connection",
-                        "color": "#d13212"
-                      }
-                    ]
-                  ]
-                }
-              },
-              {
                 "type": "text",
                 "x": 0,
                 "y": 54,
