@@ -383,7 +383,7 @@ def notify_database_connection_failure(failure_category, error_message, context=
                 failure_type=failure_category,
                 error=str(error_message),
             )
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, ValueError):
             logger.warning(
                 "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
                 "placeholder in the template); falling back to the built-in "
@@ -422,7 +422,7 @@ def notify_sqs_publish_failure(error, context=None):
                 failure_type="SQS Publish Failure",
                 error=str(error),
             )
-        except (KeyError, IndexError):
+        except (KeyError, IndexError, ValueError):
             logger.warning(
                 "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
                 "placeholder in the template); falling back to the built-in "
