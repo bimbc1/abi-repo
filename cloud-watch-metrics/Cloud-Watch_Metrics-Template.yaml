@@ -1053,29 +1053,7 @@ Resources:
                         "color": "#d13212"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
@@ -1110,29 +1088,7 @@ Resources:
                         "color": "#d13212"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
@@ -1167,29 +1123,7 @@ Resources:
                         "color": "#d13212"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
@@ -1224,29 +1158,7 @@ Resources:
                         "color": "#d13212"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
@@ -1300,32 +1212,10 @@ Resources:
                       "SQSPublishFailure",
                       {
                         "label": "SQS publish",
-                        "color": "#ff7f0e"
+                        "color": "#d13212"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
@@ -1360,29 +1250,7 @@ Resources:
                         "color": "#d13212"
                       }
                     ]
-                  ],
-                  "annotations": {
-                    "horizontal": [
-                      {
-                        "color": "#2ca02c",
-                        "label": "OK",
-                        "value": 0,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#ff7f0e",
-                        "label": "Warning",
-                        "value": 1,
-                        "fill": "above"
-                      },
-                      {
-                        "color": "#d13212",
-                        "label": "Critical",
-                        "value": 3,
-                        "fill": "above"
-                      }
-                    ]
-                  }
+                  ]
                 }
               },
               {
