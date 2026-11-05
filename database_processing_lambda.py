@@ -290,7 +290,7 @@ def upsert_manifest_metadata(message):
         track_crud("Create")
         cur.execute(
             """
-            INSERT INTO manifest_batch1 (
+            INSERT INTO manifest_batch (
                 partner_id, batch_id, partner_batch_key,
                 manifest_file_count, actual_file_count, count_discrepancy,
                 submission_timestamp, created_at, updated_at,
