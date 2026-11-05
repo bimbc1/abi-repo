@@ -52,7 +52,7 @@ Resources:
               - kms:Decrypt
               - kms:GenerateDataKey*
             Resource: "*"
-          - Sid: AllowAccountPublishersThroughSNS
+          - Sid: AllowLambdaRolePublishThroughSNS
             Effect: Allow
             Principal:
               AWS: "*"
@@ -64,7 +64,8 @@ Resources:
               StringEquals:
                 kms:CallerAccount: !Ref AWS::AccountId
                 kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
-
+              ArnEquals:
+                aws:PrincipalArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/project/project-hie-analytics-lambda-full-access-role-${Env}
   IngestionFailureSNSTopic:
     Type: AWS::SNS::Topic
     Properties:
