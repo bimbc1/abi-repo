@@ -527,6 +527,7 @@ def handle_one_message(message_id, raw_body):
             )
         logger.error("failed msg=%s: %s", message_id, str(e))
         put_metric("LambdaProcessingFailures")
+        classify_failure(e)
         if _last_failure_type:
             partner_id = (
                 (message.get("partner") or {}).get("partner_id")
