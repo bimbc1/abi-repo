@@ -71,7 +71,7 @@ def invoke_retry_handler(error, event):
         retry_metric_name = "SQSPublishRetries"
         failure_type = "SQSPublishFailure"
     else:
-        retry_metric_name = "SNSRetries"
+        retry_metric_name = "OtherRetries"
         failure_type = "OtherFailure"
         # ---PUTTING METRIC FOR RETRY---
     put_metric(
