@@ -495,17 +495,6 @@ Resources:
                   }
                 ],
                 "defaultValue": "All"
-              },
-              {
-                "type": "pattern",
-                "pattern": "__SFTPUSER__",
-                "inputType": "select",
-                "id": "sftpuser",
-                "label": "Transfer Family user",
-                "visible": true,
-                "search": "MetricName=\"TransferFamilyConnectedUsers\" OR (MetricName=\"PartnerNotInBreach\" PartnerName=\"All\")",
-                "populateFrom": "PartnerName",
-                "defaultValue": "All"
               }
             ],
             "widgets": [
@@ -586,7 +575,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"TransferFamilyFilesIn\" \"__SFTPUSER__\"', 'Sum', 1800)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerTransferFilesIn\" PartnerId=\"__PARTNER__\"', 'Sum', 1800)",
                         "id": "tu",
                         "visible": false
                       }
@@ -600,35 +589,14 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyConnectedUsers\"', 'Sum', 1800)",
-                        "id": "tua",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerName} MetricName=\"TransferFamilyConnectedUsers\" PartnerName=\"__SFTPUSER__\"', 'Sum', 1800)",
-                        "id": "tsel",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SUM([tfiles * 0, FILL(tua, 0) * 0 + 1])",
+                        "expression": "SUM([tfiles * 0, FILL(tu, 0) * 0 + 1])",
                         "id": "tusers",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "MAX([tfiles * 0, FILL(tsel, 0) * 0 + 1])",
-                        "id": "tone",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), 6 * PERIOD(tfiles) / 1800 * (MAX(tone) + (1 - MAX(tone)) * MAX(MAX([tusers, tfiles * 0 + 1]))))",
+                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), 6 * PERIOD(tfiles) / 1800 * MAX(MAX([tusers, tfiles * 0 + 1])))",
                         "id": "texpected",
                         "visible": false
                       }
@@ -706,7 +674,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Authentication (select a user, or All, from the Transfer Family user dropdown at the top)"
+                  "markdown": "## Authentication (select a partner, or All, from the Partner dropdown at the top)"
                 }
               },
               {
@@ -721,7 +689,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__SFTPUSER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__PARTNER__\"', 'Sum')",
                         "id": "u1",
                         "visible": false
                       }
@@ -753,7 +721,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__SFTPUSER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__PARTNER__\"', 'Sum')",
                         "id": "b1",
                         "label": "${!PROP('Dim.All')}"
                       }
