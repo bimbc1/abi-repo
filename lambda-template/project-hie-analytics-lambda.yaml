@@ -139,6 +139,8 @@ Resources:
           DASHBOARD_NAME: !Sub project-hie-analytics-operational-dashboard-${Env}
           METADATA_QUEUE_URL: !ImportValue
             Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
+          METADATA_PROCESSING_QUEUE_NAME: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-queue-name-${Env}
           OPERATIONAL_SNS_TOPIC_ARN: !ImportValue
             Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
           RECOVERY_SNS_TOPIC_ARN: !ImportValue
