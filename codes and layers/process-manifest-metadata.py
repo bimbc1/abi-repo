@@ -485,6 +485,43 @@ def get_conn(publish_failure_metric=True):
         raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
         ) from error
+    # ---ONE SHARED DATABASE CONNECTION PER INVOCATION (one per file arrival)---
+    # The secret is read from Secrets Manager once, when this connection is opened,
+    # and the connection is closed at the end of every invocation. The next file
+    # arrival opens a new connection with a fresh read of the secret, so a rotated
+    # password is always picked up. If the connection fails, it is not retried
+    # again in the same invocation.
+_shared_conn = {"conn": None, "failed": False}
+def get_shared_conn():
+    if _shared_conn["failed"]:
+        raise DatabaseConnectionError(
+            "Manifest processing failed due to database connection error."
+        )
+    conn = _shared_conn["conn"]
+    if conn is None:
+        try:
+            conn = get_conn()
+        except DatabaseConnectionError:
+            _shared_conn["failed"] = True
+            raise
+        _shared_conn["conn"] = conn
+    return conn
+def rollback_shared_conn():
+    conn = _shared_conn["conn"]
+    if conn is not None:
+        try:
+            conn.rollback()
+        except Exception as e:
+            logger.warning("Could not roll back shared database connection: %s", e)
+def close_shared_conn():
+    conn = _shared_conn["conn"]
+    _shared_conn["conn"] = None
+    _shared_conn["failed"] = False
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception as e:
+            logger.warning("Could not close shared database connection: %s", e)
     # ---SQS MESSAGE HELPERS---
 def publish_metadata_message(message_body, message_attributes=None):
     try:
@@ -538,21 +575,20 @@ _bucket_partner_ids = {}
 def get_partner_name_for_bucket(bucket):
     if bucket in _bucket_partner_names:
         return _bucket_partner_names[bucket]
-    conn = None
     try:
-        conn = get_conn(publish_failure_metric=False)
+        conn = get_shared_conn()
         with conn.cursor() as cur:
             partner_id, _, _ = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
         _bucket_partner_names[bucket] = partner_name
         _bucket_partner_ids[bucket] = partner_id
         return partner_name
+    except DatabaseConnectionError:
+        raise
     except Exception as e:
+        rollback_shared_conn()
         logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
         return None
-    finally:
-        if conn:
-            conn.close()
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -560,19 +596,18 @@ def get_registered_partner_count():
     cached_at = _registered_partner_count["at"]
     if cached_at and (now - cached_at).total_seconds() < 900:
         return _registered_partner_count["value"]
-    conn = None
     try:
-        conn = get_conn(publish_failure_metric=False)
+        conn = get_shared_conn()
         with conn.cursor() as cur:
             execute_crud(cur, "SELECT COUNT(*) FROM partner_registry")
             row = cur.fetchone()
         _registered_partner_count["value"] = row[0] if row else None
         _registered_partner_count["at"] = now
+    except DatabaseConnectionError:
+        raise
     except Exception as e:
+        rollback_shared_conn()
         logger.warning("Could not count registered partners: %s", e)
-    finally:
-        if conn:
-            conn.close()
     return _registered_partner_count["value"]
     # ---KEEP THE DASHBOARD PARTNER DROPDOWN IN SYNC WITH THE DATABASE (checked at most every 15 min)---
 def update_partner_dropdown():
@@ -582,9 +617,8 @@ def update_partner_dropdown():
     checked_at = _dropdown_checked["at"]
     if checked_at and (now - checked_at).total_seconds() < 900:
         return
-    conn = None
     try:
-        conn = get_conn(publish_failure_metric=False)
+        conn = get_shared_conn()
         with conn.cursor() as cur:
             execute_crud(
                 cur,
@@ -614,10 +648,8 @@ def update_partner_dropdown():
             logger.info("Partner dropdown updated with %d partner(s).", len(partners))
         _dropdown_checked["at"] = now
     except Exception as e:
+        rollback_shared_conn()
         logger.warning("Could not update partner dropdown: %s", e)
-    finally:
-        if conn:
-            conn.close()
     # --- PARTNER TRANSMISSION STATE TRACKING ---
 def update_partner_state(cur, partner_id, object_key, partner_name=None):
     now = datetime.now(timezone.utc)
@@ -1043,7 +1075,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     not_in_breach_count = None
     reset_crud_tracking()
     try:
-        conn = get_conn()
+        conn = get_shared_conn()
         with conn.cursor() as cur:
             partner_id, partner_batch_key, environment = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
@@ -1066,6 +1098,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 row = cur.fetchone()
                 not_in_breach_count = row[0] if row else None
         except Exception as count_error:
+            rollback_shared_conn()
             logger.warning("Could not count partners not in breach: %s", count_error)
             if isinstance(count_error, psycopg2.Error):
                 put_failure_metric("CRUDFailureEvents", "Read", partner_id)
@@ -1098,9 +1131,6 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             batch_id
         )
         raise
-    finally:
-        if conn:
-            conn.close()
     if breach_cleared:
         send_recovery_sns(partner_name, partner_id, environment)
     put_partner_metric("HIE/PartnerMonitoring", "PartnerRecovered", partner_id, 1 if breach_cleared else 0)
@@ -1386,6 +1416,7 @@ def process_object(bucket, key, record):
     # ---MAIN LAMBDA HANDLER---
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
+    close_shared_conn()
     invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
@@ -1441,6 +1472,7 @@ def lambda_handler(event, context):
                 "error": error_message
             })
     update_partner_dropdown()
+    close_shared_conn()
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="Latency",
