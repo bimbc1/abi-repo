@@ -137,9 +137,9 @@ def get_conn():
 
     def connect():
         try:
-            ssl_ctx = ssl.create_default_context()
-            ssl_ctx.check_hostname = False
-            ssl_ctx.verify_mode = ssl.CERT_NONE
+            ssl_ctx = ssl.create_default_context(
+                cafile=os.path.join(os.path.dirname(__file__), "us-gov-west-1-bundle.pem")
+            )
             return pg8000.dbapi.connect(
                 host=DB_HOST,
                 port=DB_PORT,
