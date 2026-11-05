@@ -4,6 +4,7 @@ import io
 import re
 import zipfile
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 import boto3
@@ -62,6 +63,7 @@ s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+logs = boto3.client("logs", region_name=AWS_REGION)
     # ---CREATING RETRY HANDLER FUNCTION---
 def invoke_retry_handler(error, event):
     if isinstance(error, DatabaseConnectionError):
@@ -589,6 +591,65 @@ def get_partner_name_for_bucket(bucket):
         rollback_shared_conn()
         logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
         return None
+    # ---TRANSFER FAMILY USER FOR AN ARRIVED FILE (read from the Transfer Family log group)---
+    # S3 gives us the bucket and file. The Transfer Family upload log line for that same
+    # file ("CLOSE" with path /<bucket>/<key>) is in a log stream named "<user>.<session-id>",
+    # so the user name comes from the stream name. The log line can arrive a few seconds
+    # after the S3 event, so the search is retried briefly.
+TRANSFER_LOG_GROUP_PREFIX = "/aws/transfer/"
+TRANSFER_LOG_LOOKBACK_SECONDS = 900
+TRANSFER_LOG_ATTEMPTS = 3
+TRANSFER_LOG_WAIT_SECONDS = 2
+_transfer_log_groups = []
+def get_transfer_log_groups():
+    if not _transfer_log_groups:
+        for page in logs.get_paginator("describe_log_groups").paginate(logGroupNamePrefix=TRANSFER_LOG_GROUP_PREFIX):
+            _transfer_log_groups.extend(g["logGroupName"] for g in page.get("logGroups", []))
+    return _transfer_log_groups
+def transfer_user_from_stream(stream_name):
+    match = re.match(r"^(?:.*/)?(.+?)(?:\.[0-9a-fA-F]{16,})?$", stream_name or "")
+    return match.group(1) if match else None
+def find_transfer_family_user(bucket, key):
+    path = f"/{bucket}/{key}".replace('"', '\\"')
+    pattern = '{ ($.activity-type = "CLOSE") && ($.path = "%s") }' % path
+    start_ms = int((datetime.now(timezone.utc).timestamp() - TRANSFER_LOG_LOOKBACK_SECONDS) * 1000)
+    for attempt in range(TRANSFER_LOG_ATTEMPTS):
+        for group in get_transfer_log_groups():
+            kwargs = {"logGroupName": group, "startTime": start_ms, "filterPattern": pattern}
+            for _ in range(10):
+                resp = logs.filter_log_events(**kwargs)
+                for event in resp.get("events", []):
+                    user = transfer_user_from_stream(event.get("logStreamName"))
+                    if user:
+                        return user
+                if not resp.get("nextToken"):
+                    break
+                kwargs["nextToken"] = resp["nextToken"]
+        if attempt < TRANSFER_LOG_ATTEMPTS - 1:
+            time.sleep(TRANSFER_LOG_WAIT_SECONDS)
+    return None
+def publish_transfer_family_file_in(bucket, key, partner_id):
+    try:
+        user = find_transfer_family_user(bucket, key)
+    except Exception as e:
+        logger.warning("Could not search the Transfer Family log group for s3://%s/%s: %s", bucket, key, e)
+        user = None
+    if user is None:
+        logger.warning(
+            "Transfer Family user not found for s3://%s/%s (not uploaded through Transfer Family, "
+            "or its log line is delayed).", bucket, key
+        )
+        put_partner_metric("HIE/OperationalMonitoring", "TransferFamilyUserNotFound", partner_id, 1)
+        return None
+    logger.info(
+        "Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s | file=%s",
+        user, _bucket_partner_names.get(bucket), partner_id, bucket, key
+    )
+    put_partner_metric(
+        "HIE/OperationalMonitoring", "PartnerTransferFilesIn", partner_id, 1,
+        extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+    )
+    return user
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -1369,6 +1430,8 @@ def process_object(bucket, key, record):
     get_partner_name_for_bucket(bucket)
     arrival_partner_id = _bucket_partner_ids.get(bucket)
     put_partner_metric("HIE/OperationalMonitoring", "S3ObjectArrivals", arrival_partner_id, 1)
+    # ---TRANSFER FAMILY USER -> PARTNER, FILES IN PER PARTNER ID + "All"---
+    publish_transfer_family_file_in(bucket, key, arrival_partner_id)
     # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
     registered_partner_count = get_registered_partner_count()
     for _pid, _value in ((arrival_partner_id, 1), ("All", registered_partner_count)):
