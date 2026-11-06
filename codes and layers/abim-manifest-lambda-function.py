@@ -621,7 +621,8 @@ def is_completed_upload(message, path):
     except ValueError:
         record = None
     if isinstance(record, dict):
-        return record.get("activity-type") == "CLOSE" and record.get("path") == path
+        activity = record.get("activity-type") or record.get("activity")
+        return activity == "CLOSE" and (record.get("path") or record.get("Path")) == path
     exact_path = r"(?:^|[\s=])" + re.escape(path) + r"(?:\s|$)"
     return "CLOSE" in text.split()[:3] and re.search(exact_path, text) is not None
 def find_transfer_family_user(bucket, key):
@@ -688,7 +689,13 @@ def parse_transfer_log_line(message):
     except ValueError:
         record = None
     if isinstance(record, dict):
-        return record.get("activity-type"), record.get("user"), record.get("home-dir")
+        # JSON logs use activity-type/user/home-dir; this log group's transformer
+        # produces activity/User/HomeDir.
+        return (
+            record.get("activity-type") or record.get("activity"),
+            record.get("user") or record.get("User"),
+            record.get("home-dir") or record.get("HomeDir"),
+        )
     words = text.split()
     activity = next((w for w in words[:3] if w in ("AUTH_FAILURE", "CONNECTED")), None)
     user = re.search(r"(?:^|\s)User=(\S+)", text)
