@@ -472,6 +472,26 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
+  # Login failures per partner: every AUTH_FAILURE line is sent to the Manifest
+  # Metadata Lambda, which finds the user's partner and publishes PartnerLoginFailures.
+  TransferLoginFailuresLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue
+        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+      Action: lambda:InvokeFunction
+      Principal: logs.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/transfer/${TransferServerId}:*
+
+  TransferLoginFailuresSubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    DependsOn: TransferLoginFailuresLambdaPermission
+    Properties:
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
+      FilterPattern: '"AUTH_FAILURE"'
+      DestinationArn: !ImportValue
+        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
 
   ManifestMetadataDashboard:
     Type: AWS::CloudWatch::Dashboard
@@ -689,7 +709,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__PARTNER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
                         "id": "u1",
                         "visible": false
                       }
@@ -721,9 +741,9 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,All} MetricName=\"LoginFailuresByUser\" \"__PARTNER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
                         "id": "b1",
-                        "label": "${!PROP('Dim.All')}"
+                        "label": "${!PROP('Dim.TransferUser')}"
                       }
                     ]
                   ],
