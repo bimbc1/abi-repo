@@ -50,9 +50,6 @@ ALERT_COOLDOWN_SECONDS = int(
 )
 _last_alert_times = {}
 
-DEFAULT_EXPECTED_INTERVAL_SECONDS = 86400
-MIN_SAMPLES_BEFORE_LEARNING = 5
-
 sns = boto3.client("sns", region_name=AWS_REGION)
 
 METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
@@ -69,21 +66,6 @@ cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
 
 def invoke_retry_handler(error, event):
-	if isinstance(error, DatabaseConnectionRetries):
-		retry_metric_name = "DatabaseConnectionRetries"
-		failure_type = "DatabaseConnectionFailure"
-	elif isinstance(error, SQSPublishError):
-		retry_metric_name = "SQSPublishRetries"
-		failure_type = "SQSPublishFailure"
-	else:
-		retry_metric_name = "SNSRetries"
-		failure_type = "OtherFailure"
-	put_metric(
-		namespace="HIE/OperationalMonitoring",
-		metric_name=retry_metric_name,
-		value=1
-	)
-	put_failure_metric("RetryEvents", failure_type)
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
@@ -96,7 +78,6 @@ def invoke_retry_handler(error, event):
             metric_name="RetryHandlerInvocationFailures",
             value=1
         )
-		put_failure_metric("RetryHandlerInvocationFailures")
         return False
 
 
@@ -117,7 +98,7 @@ def extract_batch_id(filename):
     for index, part in enumerate(parts):
         if part.lower() in markers:
             return "_".join(parts[:index])
-    return parts[0]
+    return "_".join(parts[:2]) if len(parts) >= 2 else parts[0]
 
 # FILE NAME MATCHING
 def is_manifest_file(filename):
@@ -312,24 +293,12 @@ def _publish_operational_alert(subject, message, failure_category):
                 }
             },
         )
-
-		put_metric(
-			namespace="HIE/OperationalMonitoring",
-			metric_name="SNSNotificationsSent",
-			value=1
-		)
         _record_alert_time(failure_category)
         logger.info(
             "Published alert to SNS topic '%s' for category '%s'.",
             SNS_TOPIC_ARN,
             failure_category,
         )
-		put_metric(
-			namespace="HIE/OperationalMonitoring",
-			metric_name="ActiveIncidents",
-			value=1,
-			dimensions=[{"Name": "FailureCategory", "Value": failure_category}]
-		)
         return True
 
     except Exception:
@@ -418,11 +387,6 @@ def get_conn():
 		)
 	except Exception as error:
 		logging.exception("Unable to connect to the database: %s", str(error))
-		put_metric(
-			namespace="HIE/OperationalMonitoring",
-			metric_name="DatabaseConnectionFailures",
-			value=1
-		)
 
 		raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
@@ -481,21 +445,48 @@ def get_partner_name(cur, partner_id):
     return row[0] if row else f"Partner {partner_id}"
 
 
-def update_partner_state(cur, partner_id, object_key):
+def update_partner_state(cur, partner_id, object_key, partner_name, payload_arrived_at):
+    # Use the last S3 object arrival time for the completed payload, not Lambda execution time.
     now = datetime.now(timezone.utc)
+    if isinstance(payload_arrived_at, str):
+        payload_arrived_at = datetime.fromisoformat(payload_arrived_at.replace("Z", "+00:00"))
+    if payload_arrived_at.tzinfo is None:
+        raise ValueError("S3 arrival timestamp must include a timezone")
+    payload_arrived_at = payload_arrived_at.astimezone(timezone.utc)
     filename = os.path.basename(object_key)
     batch_id = extract_batch_id(filename)
     batch_prefix = f"{batch_id}_"
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
+
+    # Read the previous transmission timestamp before updating it.
     cur.execute(
         """
-        SELECT 1
+        SELECT last_seen_at
         FROM partner_transmission_state
         WHERE partner_id = %s
+        FOR UPDATE
         """,
         (partner_id,),
     )
-    if cur.fetchone():
+    previous_row = cur.fetchone()
+
+    previous_last_seen_at = previous_row[0] if previous_row else None
+    if previous_last_seen_at is not None:
+        if previous_last_seen_at.tzinfo is None:
+            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
+        else:
+            previous_last_seen_at = previous_last_seen_at.astimezone(timezone.utc)
+        if payload_arrived_at <= previous_last_seen_at:
+            logger.info(
+                "Skipping duplicate/out-of-order payload partner_name=%s batch_id=%s "
+                "arrival=%s previous_last_seen_at=%s",
+                partner_name, batch_id, payload_arrived_at.isoformat(),
+                previous_last_seen_at.isoformat(),
+            )
+            return {"status": "STALE", "partner_name": partner_name, "batch_id": batch_id}
+
+    # Only advance state for a newer completed payload.
+    if previous_row:
         cur.execute(
             """
             UPDATE partner_transmission_state
@@ -505,67 +496,50 @@ def update_partner_state(cur, partner_id, object_key):
                 updated_at = %s
             WHERE partner_id = %s
             """,
-            (now, batch_id, clean_filename, now, partner_id),
+            (payload_arrived_at, batch_id, clean_filename, now, partner_id),
         )
     else:
         cur.execute(
             """
             INSERT INTO partner_transmission_state(
-                partner_id,
-                last_seen_at,
-                batch_id,
-                last_object_key,
-                updated_at
-            )
-            VALUES (%s,%s,%s,%s,%s)
+                partner_id, last_seen_at, batch_id, last_object_key, updated_at
+            ) VALUES (%s,%s,%s,%s,%s)
             """,
-            (partner_id, now, batch_id, clean_filename, now),
+            (partner_id, payload_arrived_at, batch_id, clean_filename, now),
         )
-	put_metric(
-		namespace="HIE/PartnerMonitoring",
-		metric_name="PartnerTransmissionReceived",
-		value=1,
-		unit="Count",
-		dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
-	)
-	if existing_row and existing_row[0]:
-        previous_last_seen_at = existing_row[0]
-        if previous_last_seen_at.tzinfo is None:
-            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
-        gap_seconds = (now - previous_last_seen_at).total_seconds()
-        execute_crud(
-            cur,
-            """
-            SELECT expected_interval_seconds
-            FROM partner_schedule
-            WHERE partner_id = %s
-            """,
-            (partner_id,),
-        )
-        schedule_row = cur.fetchone()
-        expected_interval_seconds = schedule_row[0] if schedule_row else None
-        if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
-            put_metric(
-                namespace="HIE/PartnerMonitoring",
-                metric_name="StaleConnection",
-                value=1,
-                unit="Count",
-                dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
-            )
-            # ---STALE CONNECTION PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
-            for _pid, _pname in ((str(partner_id), str(partner_name)), ("All", "All")):
-                put_metric(
-                    namespace="HIE/PartnerMonitoring",
-                    metric_name="StaleConnection",
-                    value=1,
-                    unit="Count",
-                    dimensions=[
-                        {"Name": "PartnerId", "Value": _pid},
-                        {"Name": "PartnerName", "Value": _pname}
-                    ]
-                )
-		
-def clear_breach_flag(cur, partner_id, expected_interval_seconds):
+
+    # Read the configured SLA even for the first transmission.
+    cur.execute(
+        """
+        SELECT expected_interval_seconds
+        FROM partner_schedule
+        WHERE partner_id = %s
+        """,
+        (partner_id,),
+    )
+    schedule_row = cur.fetchone()
+    if not schedule_row or schedule_row[0] is None or schedule_row[0] <= 0:
+        raise ValueError(f"Missing or invalid SLA for partner_id={partner_id}")
+    expected_interval_seconds = schedule_row[0]
+
+    # The first payload establishes a baseline; it cannot be classified by gap.
+    if previous_last_seen_at is None:
+        return None
+
+    gap_seconds = (payload_arrived_at - previous_last_seen_at).total_seconds()
+    if gap_seconds < 0:
+        raise ValueError(f"Negative payload gap for partner_id={partner_id}")
+
+    return {
+        "partner_name": partner_name,
+        "batch_id": batch_id,
+        "gap_seconds": gap_seconds,
+        "expected_interval_seconds": expected_interval_seconds,
+        "status": "ON_TIME" if gap_seconds <= expected_interval_seconds else "BREACH",
+    }
+
+
+def clear_breach_flag(cur, partner_id):
     cur.execute(
         """
         SELECT breach_flag
@@ -575,27 +549,12 @@ def clear_breach_flag(cur, partner_id, expected_interval_seconds):
         (partner_id,),
     )
     row = cur.fetchone()
+	
     if row is None:
-        cur.execute(
-            """
-            INSERT INTO partner_schedule(
-                partner_id,
-                expected_interval_seconds,
-                breach_flag,
-                last_alert_at,
-                updated_at
-            )
-            VALUES (%s, %s, FALSE, NOW(), NOW())
-            """,
-            (partner_id, expected_interval_seconds),
+        raise ValueError(
+            f"No partner_schedule configuration found for partner_id={partner_id}"
         )
-        logger.info(
-            "No partner_schedule row existed for partner_id=%s -- created one "
-            "(first successful batch) with expected_interval_seconds=%s.",
-            partner_id,
-            expected_interval_seconds
-        )
-        return False
+
     if row[0]:
         cur.execute(
             """
@@ -925,22 +884,12 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         }
     }
 
-def get_partner_sample_count(cur, partner_id):
-    cur.execute(
-        """
-        SELECT COUNT(*)
-        FROM manifest_batch
-        WHERE partner_id = %s
-        """,
-        (partner_id,),
-    )
-    row = cur.fetchone()
-    return row[0] if row else 0
 
 def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start):
     conn = None
     partner_id = partner_batch_key = environment = partner_name = None
     breach_cleared = False
+    on_time_transmission = None
     try:
         conn = get_conn()
         with conn.cursor() as cur:
@@ -949,16 +898,17 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
 
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
-            update_partner_state(cur, partner_id, latest_meta["key"])
+            on_time_transmission = update_partner_state(
+                cur,
+                partner_id,
+                latest_meta["key"],
+                partner_name,
+                latest_meta["last_modified_utc"]
+            )
 
-            elapsed_seconds = (datetime.now(timezone.utc) - processing_start).total_seconds()
-            sample_count = get_partner_sample_count(cur, partner_id)
-            if sample_count < MIN_SAMPLES_BEFORE_LEARNING:
-                expected_interval_seconds = DEFAULT_EXPECTED_INTERVAL_SECONDS
-            else:
-                expected_interval_seconds = max(60, int(round(elapsed_seconds)))
 
-            breach_cleared = clear_breach_flag(cur, partner_id, expected_interval_seconds)
+            if not (on_time_transmission and on_time_transmission.get("status") == "STALE"):
+                breach_cleared = clear_breach_flag(cur, partner_id)
         conn.commit()
     except Exception as e:
         if conn:
@@ -986,31 +936,52 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         if conn:
             conn.close()
 
+    # Publish the classification only after the database transaction commits.
+    if on_time_transmission is not None and on_time_transmission["status"] != "STALE":
+        status = on_time_transmission["status"]
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name=("OnTimeTransmissions" if status == "ON_TIME"
+                         else "DelayedTransmissions"),
+            value=1,
+            unit="Count",
+            dimensions=[
+                {"Name": "PartnerName", "Value": str(on_time_transmission["partner_name"])}
+            ],
+        )
+        logger.info(
+            "TransmissionStatus partner_name=%s batch_id=%s status=%s "
+            "gap_seconds=%.2f sla_threshold_seconds=%s",
+            on_time_transmission["partner_name"],
+            on_time_transmission["batch_id"],
+            status,
+            on_time_transmission["gap_seconds"],
+            on_time_transmission["expected_interval_seconds"],
+        )
+
     if breach_cleared:
+        logger.info(
+            "PartnerRecovery "
+            "partner_name=%s "
+            "partner_id=%s "
+            "batch_id=%s "
+            "status=RECOVERED "
+            "breach_flag=FALSE",
+            partner_name.replace(" ", "_"),
+            partner_id,
+            batch_id
+        )
+
         send_recovery_sns(partner_name, partner_id, environment)
 
-    put_metric(
-        namespace="HIE/PartnerMonitoring",
-        metric_name="PartnerRecovered",
-        value=1 if breach_cleared else 0,
-        unit="Count",
-        dimensions=[{"Name": "PartnerName", "Value": partner_name}]
-    )
-
-	for _pid, _pname, _value in (
-		(str(partner_id), str(partner_name), 1)
-		("All", "All", not_in_breach_count if not_in_breach_count is not None else 1),
-	):
-		put_metric(
-			namespace="HIE/PartnerMonitoring",
-			metric_name="PartnerNotInBreach",
-			value=_value,
-			unit="Count",
-			dimensions=[
-				{"Name": "PartnerName", "Value": _pname},
-				{"Name": "PartnerId", "Value": _pid}
-			]
-		)
+    if not (on_time_transmission and on_time_transmission.get("status") == "STALE"):
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerRecovered",
+            value=1 if breach_cleared else 0,
+            unit="Count",
+            dimensions=[{"Name": "PartnerName", "Value": partner_name}]
+        )
 
     return {
         "partner_id": partner_id,
@@ -1183,27 +1154,6 @@ def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
     except Exception as e:
         logger.warning("Failed to publish CloudWatch metric %s: %s", metric_name, e)
 
-def put_failure_metric(metric_name, failure_type=None, partner_name=None):
-    """Publish a failure metric tagged with this Lambda's name and failure type."""
-    dimensions = [{"Name": "FunctionName", "Value": FUNCTION_NAME}]
-    if failure_type:
-        dimensions.append({"Name": "FailureType", "Value": failure_type})
-    put_metric(
-        namespace="HIE/OperationalMonitoring",
-        metric_name=metric_name,
-        value=1,
-        dimensions=dimensions
-    )
-    # ---CRUD FAILURES PER PARTNER (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
-    if metric_name == "CRUDFailureEvents":
-        for _pname in ([partner_name, "All"] if partner_name else ["All"]):
-            put_metric(
-                namespace="HIE/OperationalMonitoring",
-                metric_name=metric_name,
-                value=1,
-                dimensions=dimensions + [{"Name": "PartnerName", "Value": _pname}]
-            )
-
 
 # MAIN OBJECT PROCESSOR
 def process_object(bucket, key, record):
@@ -1226,27 +1176,6 @@ def process_object(bucket, key, record):
         metric_name="S3ObjectArrivals",
         value=1
     )
-
-	# ---S3 OBJECT ARRIVALS PER PARTNER NAME + "All" (used by the dashboard Partner dropdown)---
-    arrival_partner_name = get_partner_name_for_bucket(bucket)
-    for _pname in ([arrival_partner_name, "All"] if arrival_partner_name else ["All"]):
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="S3ObjectArrivals",
-            value=1,
-            dimensions=[{"Name": "PartnerName", "Value": _pname}]
-        )
-
-	# ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
-    registered_partner_count = get_registered_partner_count()
-    for _pname, _value in ((arrival_partner_name, 1), ("All", registered_partner_count)):
-        if _pname and _value:
-            put_metric(
-                namespace="HIE/OperationalMonitoring",
-                metric_name="RegisteredPartners",
-                value=_value,
-                dimensions=[{"Name": "PartnerName", "Value": _pname}]
-            )
 
     if not is_target_file(filename):
         logger.info("Skipping non-target file: %s", filename)
@@ -1295,16 +1224,9 @@ def process_object(bucket, key, record):
 
 # LAMBDA ENTRY
 def lambda_handler(event, context):
-    logger.info("Main Lambda handler.")
-    invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
         logger.info("No records found in event.")
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="ServiceAvailability",
-            value=1
-        )
         return {"statusCode": 200, "body": "No records to process."}
     results = []
     had_failure = False
@@ -1343,23 +1265,14 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
+
             route_critical_failure_notification(e, record)
+
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
-    put_metric(
-        namespace="HIE/OperationalMonitoring",
-        metric_name="Latency",
-        value=(datetime.now(timezone.utc) - invocation_start).total_seconds(),
-        unit="Seconds"
-    )
-    put_metric(
-        namespace="HIE/OperationalMonitoring",
-        metric_name="ServiceAvailability",
-        value=0 if retry_handler_failed else 1
-    )
     if retry_handler_failed:
         return {
             "statusCode": 500,
