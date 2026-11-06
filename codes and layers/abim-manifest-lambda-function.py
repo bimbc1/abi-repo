@@ -3,6 +3,8 @@ import json
 import io
 import re
 import zipfile
+import gzip
+import base64
 import logging
 import time
 from datetime import datetime, timezone
@@ -668,6 +670,107 @@ def publish_transfer_family_file_in(bucket, key, partner_id):
         extra_dimensions=[{"Name": "TransferUser", "Value": user}]
     )
     return user
+    # ---TRANSFER FAMILY LOGIN FAILURES PER PARTNER (Lambda invoked by a CloudWatch Logs
+    # subscription filter on AUTH_FAILURE lines of the Transfer Family log group)---
+    # A failed login has only the user name. The user's bucket comes from that user's last
+    # successful login (CONNECTED line, home-dir / HomeDir), and the bucket gives the partner.
+    # Works for both log formats:
+    #   JSON: {"activity-type":"AUTH_FAILURE","user":"Oracle",...}
+    #         {"activity-type":"CONNECTED","user":"Oracle","home-dir":"/<bucket>",...}
+    #   text: ERRORS AUTH_FAILURE Method=publickey User=Oracle ...
+    #         Oracle.<session-id> CONNECTED SourceIP=... User=Oracle HomeDir=/<bucket> ...
+TRANSFER_HOME_LOOKBACK_SECONDS = 30 * 24 * 3600
+_transfer_user_buckets = {}
+def parse_transfer_log_line(message):
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        return record.get("activity-type"), record.get("user"), record.get("home-dir")
+    words = text.split()
+    activity = next((w for w in words[:3] if w in ("AUTH_FAILURE", "CONNECTED")), None)
+    user = re.search(r"(?:^|\s)User=(\S+)", text)
+    home = re.search(r"(?:^|\s)HomeDir=(\S+)", text)
+    return activity, user.group(1).strip('"') if user else None, home.group(1).strip('"') if home else None
+TRANSFER_HOME_SEARCH_WINDOWS = (3600, 24 * 3600, TRANSFER_HOME_LOOKBACK_SECONDS)
+TRANSFER_HOME_SEARCH_MAX_SECONDS = 20
+def find_transfer_user_bucket(log_group, user):
+    if user in _transfer_user_buckets:
+        return _transfer_user_buckets[user]
+    pattern = '"CONNECTED" "%s"' % user.replace('"', '\\"')
+    deadline = time.time() + TRANSFER_HOME_SEARCH_MAX_SECONDS
+    now_s = datetime.now(timezone.utc).timestamp()
+    # Newest logins first: last hour, then last day, then the full lookback.
+    for window in TRANSFER_HOME_SEARCH_WINDOWS:
+        kwargs = {
+            "logGroupName": log_group,
+            "startTime": int((now_s - window) * 1000),
+            "filterPattern": pattern,
+        }
+        bucket = None
+        while time.time() < deadline:
+            resp = logs.filter_log_events(**kwargs)
+            for event in resp.get("events", []):
+                activity, line_user, home_dir = parse_transfer_log_line(event.get("message"))
+                if activity == "CONNECTED" and line_user == user and home_dir:
+                    parts = [x for x in home_dir.split("/") if x]
+                    if parts:
+                        bucket = parts[0]
+            if not resp.get("nextToken"):
+                break
+            kwargs["nextToken"] = resp["nextToken"]
+        if bucket:
+            _transfer_user_buckets[user] = bucket
+            return bucket
+        if time.time() >= deadline:
+            break
+    return None
+def handle_transfer_login_failures(event):
+    payload = json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
+    if payload.get("messageType") != "DATA_MESSAGE":
+        return {"statusCode": 200, "body": "Control message ignored."}
+    log_group = payload.get("logGroup")
+    counted = 0
+    for log_event in payload.get("logEvents", []):
+        activity, user, _ = parse_transfer_log_line(log_event.get("message"))
+        if activity != "AUTH_FAILURE":
+            continue
+        user = user or "Unknown"
+        partner_id = None
+        bucket = None
+        try:
+            if user != "Unknown":
+                bucket = find_transfer_user_bucket(log_group, user)
+            if bucket:
+                get_partner_name_for_bucket(bucket)
+                partner_id = _bucket_partner_ids.get(bucket)
+        except Exception as e:
+            rollback_shared_conn()
+            logger.warning("Could not find the partner for Transfer Family user %s: %s", user, e)
+        if partner_id is None:
+            if user == "Unknown":
+                reason = "no user name in the AUTH_FAILURE line"
+            elif not bucket:
+                reason = "no earlier successful login (CONNECTED with home folder) found in %s" % log_group
+            else:
+                reason = "bucket %s is not registered in partner_registry" % bucket
+            logger.warning(
+                "Login failure for Transfer Family user %s could not be matched to a partner: %s. "
+                "Counted under All only.", user, reason
+            )
+        else:
+            logger.info(
+                "Login failure | Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s",
+                user, _bucket_partner_names.get(bucket), partner_id, bucket
+            )
+        put_partner_metric(
+            "HIE/OperationalMonitoring", "PartnerLoginFailures", partner_id, 1,
+            extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+        )
+        counted += 1
+    return {"statusCode": 200, "body": f"Login failures counted: {counted}"}
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -1498,6 +1601,12 @@ def process_object(bucket, key, record):
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
     close_shared_conn()
+    # ---TRANSFER FAMILY LOGIN FAILURES (from the CloudWatch Logs subscription filter)---
+    if "awslogs" in event:
+        try:
+            return handle_transfer_login_failures(event)
+        finally:
+            close_shared_conn()
     invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
