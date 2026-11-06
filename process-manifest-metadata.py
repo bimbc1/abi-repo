@@ -3,19 +3,21 @@ import json
 import io
 import re
 import zipfile
+import gzip
+import base64
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 import boto3
 import psycopg2
-
+    # ---RETRY UTILITY IMPORT WITH FALLBACK---
 try:
     import retry_utils
 except ImportError as e:
     logging.getLogger().error(
         "retry_utils layer missing or failed to import: %s", e
     )
-
     class _RetryUtilsFallback:
         @staticmethod
         def handle_retry(error, event):
@@ -23,54 +25,73 @@ except ImportError as e:
                 "Fallback handle_retry invoked -- retry_utils layer not "
                 "available. Error: %s | Event: %s", error, event
             )
-            return False
-
+            raise RuntimeError("retry_utils layer not available; no retry was performed.")
     retry_utils = _RetryUtilsFallback()
-
+    # --SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
 logger = logging.getLogger()
 logger.setLevel(os.getenv("LOG_LEVEL", "INFO").upper())
-
-AWS_REGION = os.environ.get("AWS_REGION", "us-gov-west-1")
-
-SNS_TOPIC_ARN = os.environ.get("SNS_TOPIC_ARN")
-SNS_SUBJECT_TEMPLATE = os.environ.get(
-    "SNS_SUBJECT_TEMPLATE",
-    "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
+ # --ENVIRONMENT VARIABLES---
+AWS_REGION               = os.environ.get("AWS_REGION", "us-gov-west-1")
+# SNS_TOPIC_ARN is the single topic used by the other version of this code. If the
+# separate OPERATIONAL / RECOVERY topics are not set, both fall back to SNS_TOPIC_ARN,
+# so this file works with either set of environment variables.
+SNS_TOPIC_ARN                        = os.environ.get("SNS_TOPIC_ARN")
+OPERATIONAL_SNS_TOPIC_ARN            = os.environ.get("OPERATIONAL_SNS_TOPIC_ARN") or SNS_TOPIC_ARN
+RECOVERY_SNS_TOPIC_ARN               = os.environ.get("RECOVERY_SNS_TOPIC_ARN") or SNS_TOPIC_ARN
+FAILURE_MESSAGE_TYPE     = os.environ.get(
+    "FAILURE_MESSAGE_TYPE"
 )
 RESUMED_MESSAGE_TEMPLATE = os.environ.get(
     "RESUMED_MESSAGE_TEMPLATE",
     "{partner_name} file delivery has resumed and files are being received successfully in the {environment} environment."
 )
-WARNING_INFO = os.environ.get("WARNING_INFO", "")
-
-# Variables for database connection and SQS queue.
-
-ALERT_COOLDOWN_SECONDS = int(
-	os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
+SNS_SUBJECT_TEMPLATE = os.environ.get(
+    "SNS_SUBJECT_TEMPLATE",
+    "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
 )
+ALERT_COOLDOWN_SECONDS = int(
+    os.environ.get("ALERT_COOLDOWN_SECONDS", "3600")
+)
+WARNING_INFO = os.environ.get("WARNING_INFO", "")
 _last_alert_times = {}
-
 sns = boto3.client("sns", region_name=AWS_REGION)
-
-METADATA_QUEUE_URL = os.environ["METADATA_QUEUE_URL"]
-
-DB_SECRET_ARN = os.environ["DB_SECRET_ARN"]
-DB_HOST = os.environ["DB_HOST"]
-DB_PORT = int(os.environ.get("DB_PORT", "5432"))
-DB_NAME = os.environ.get("DB_NAME", "ccda01")
+METADATA_QUEUE_URL  = os.environ["METADATA_QUEUE_URL"]
+DB_SECRET_ARN       = os.environ["DB_SECRET_ARN"]
+DB_HOST             = os.environ["DB_HOST"]
+DB_PORT             = int(os.environ.get("DB_PORT", "5432"))
+DB_NAME             = os.environ.get("DB_NAME", "ccda01")
 INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
-
+FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+DASHBOARD_NAME      = os.environ.get("DASHBOARD_NAME")
+_dropdown_checked   = {"at": None}
+    # --AWS CLIENTS---
 s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-
+logs = boto3.client("logs", region_name=AWS_REGION)
+    # ---CREATING RETRY HANDLER FUNCTION---
 def invoke_retry_handler(error, event):
+    if isinstance(error, DatabaseConnectionError):
+        retry_metric_name = "DatabaseConnectionRetries"
+        failure_type = "DatabaseConnectionFailure"
+    elif isinstance(error, SQSPublishError):
+        retry_metric_name = "SQSPublishRetries"
+        failure_type = "SQSPublishFailure"
+    else:
+        retry_metric_name = "OtherRetries"
+        failure_type = "OtherFailure"
+        # ---PUTTING METRIC FOR RETRY---
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name=retry_metric_name,
+        value=1
+    )
+    put_failure_metric("RetryEvents", failure_type)
     try:
         retry_utils.handle_retry(error, event)
         logger.info("Retry handler invoked successfully")
         return True
-
     except Exception as e:
         logger.error(f"Retry handler invocation failed: {e}")
         put_metric(
@@ -78,14 +99,11 @@ def invoke_retry_handler(error, event):
             metric_name="RetryHandlerInvocationFailures",
             value=1
         )
+        put_failure_metric("RetryHandlerInvocationFailures")
         return False
-
-
-# COMMON HELPERS
+    # ---HELPER FUNCTIONS---
 def utc_now_iso():
     return datetime.now(timezone.utc).isoformat()
-
-
 def extract_batch_id(filename):
     parts = filename.split("_")
     markers = {
@@ -99,25 +117,16 @@ def extract_batch_id(filename):
         if part.lower() in markers:
             return "_".join(parts[:index])
     return "_".join(parts[:2]) if len(parts) >= 2 else parts[0]
-
-# FILE NAME MATCHING
+    # --- FILE TYPE DETECTION ---
 def is_manifest_file(filename):
     return filename.lower().endswith("manifest.txt")
-
-
 def is_report_file(filename):
     return filename.lower().endswith("report.txt")
-
-
 def is_zip_file(filename):
     return filename.lower().endswith("ccda.zip")
-
-
 def is_target_file(filename):
-    """Check if file is one of the 3 target files."""
     return is_manifest_file(filename) or is_report_file(filename) or is_zip_file(filename)
-
-
+    # --- BATCH TYPE CLASSIFICATION ---
 def classify_batch_type(filename):
     lower = filename.lower()
     if is_manifest_file(filename):
@@ -133,8 +142,7 @@ def classify_batch_type(filename):
             return "DISCLOSURE"
         return None
     return None
-
-
+    # --- S3 BATCH FILE DISCOVERY ---
 def list_batch_keys(bucket, batch_id):
     keys = []
     token = None
@@ -144,17 +152,15 @@ def list_batch_keys(bucket, batch_id):
             kwargs["ContinuationToken"] = token
         resp = s3.list_objects_v2(**kwargs)
         for obj in resp.get("Contents", []):
-            keys.append(obj["Key"])
+            key = obj["Key"]
+            if extract_batch_id(os.path.basename(key)) == batch_id:  # tighten match
+                keys.append(key)
         if resp.get("IsTruncated"):
             token = resp.get("NextContinuationToken")
         else:
             break
-    return [
-        k for k in keys
-        if extract_batch_id(os.path.basename(k)) == batch_id
-    ]
-
-
+    return keys
+    # --- BATCH FILE PAIR SELECTION ---
 def find_available_keys(bucket, batch_id, batch_type):
     keys = list_batch_keys(bucket, batch_id)
     manifest_key = None
@@ -189,9 +195,8 @@ def find_available_keys(bucket, batch_id, batch_type):
             ignored_files,
         )
     return manifest_key, report_key, zip_key
-
-
 def get_object_metadata(bucket, key):
+    """Get metadata for an S3 object."""
     if not key:
         return None
     head = s3.head_object(Bucket=bucket, Key=key)
@@ -202,12 +207,52 @@ def get_object_metadata(bucket, key):
         "last_modified_utc": head["LastModified"].astimezone(timezone.utc).isoformat(),
         "etag": head.get("ETag", "").replace('"', "")
     }
-
-
+    # --- S3 OBJECT PROCESSING TAGS ---
 PROCESSED_TAG_VALUE = "true"
 MANIFEST_SENT_TAG_KEY = "manifest-metadata-sent"
 REPORT_SENT_TAG_KEY = "report-metadata-sent"
 
+    # --- BATCH ARRIVAL LOGGING & BUCKET FILE COUNT ---
+def count_total_files_in_bucket(bucket):
+    """Count all objects (excluding folder placeholders) in the S3 bucket."""
+    total = 0
+    token = None
+    while True:
+        kwargs = {"Bucket": bucket}
+        if token:
+            kwargs["ContinuationToken"] = token
+        resp = s3.list_objects_v2(**kwargs)
+        for obj in resp.get("Contents", []):
+            if not obj["Key"].endswith("/"):
+                total += 1
+        if resp.get("IsTruncated"):
+            token = resp.get("NextContinuationToken")
+        else:
+            break
+    return total
+
+
+def log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_key, report_key, zip_key):
+    """Log the files received for a complete batch, then the total file count in the bucket."""
+    try:
+        batch_files = [os.path.basename(k) for k in (manifest_key, report_key, zip_key) if k]
+        logger.info(
+            "Batch %s | type=%s | Batch received with %d file(s): %s",
+            batch_id,
+            batch_type,
+            len(batch_files),
+            ", ".join(batch_files),
+        )
+        total_files = count_total_files_in_bucket(bucket)
+        logger.info(
+            "Bucket %s | Total number of files currently present in S3 bucket: %d",
+            bucket,
+            total_files,
+        )
+    except Exception as e:
+        logger.warning(
+            "Batch %s | Could not log batch/bucket file counts: %s", batch_id, e
+        )
 
 def _get_object_tags(bucket, key):
     try:
@@ -216,12 +261,8 @@ def _get_object_tags(bucket, key):
     except Exception as e:
         logger.warning("Could not read tags on %s: %s", key, e)
         return {}
-
-
 def is_message_already_sent(bucket, key, tag_key):
     return _get_object_tags(bucket, key).get(tag_key) == PROCESSED_TAG_VALUE
-
-
 def mark_message_as_sent(bucket, key, tag_key):
     try:
         tag_set = _get_object_tags(bucket, key)
@@ -233,26 +274,42 @@ def mark_message_as_sent(bucket, key, tag_key):
         )
     except Exception as e:
         logger.warning("Could not tag %s as sent (%s): %s", key, tag_key, e)
-
-
 def is_batch_already_sent(bucket, manifest_key):
     tag_set = _get_object_tags(bucket, manifest_key)
     return (
         tag_set.get(MANIFEST_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
         and tag_set.get(REPORT_SENT_TAG_KEY) == PROCESSED_TAG_VALUE
     )
-
-
+    # --- CUSTOM EXCEPTIONS ---
 class DatabaseConnectionError(RuntimeError):
-    """Raised when the manifest lambda cannot open a DB connection."""
-    pass
-
+    """Raised when there is an error connecting to the database."""
 class SQSPublishError(RuntimeError):
-    """Raised when publishing a metadata message to SQS fails."""
-    pass
-
-
+    """Raised when there is an error publishing to the SQS queue."""
+    # --- CRUD OPERATION TRACKING ---
+    # Every SQL statement goes through execute_crud(), which records whether it
+    # is a Create (INSERT), Read (SELECT), Update (UPDATE) or Delete (DELETE).
+    # When a database error happens, the failure metric is tagged with the
+    # operation that was running, so the dashboard can chart each one separately.
+CRUD_OPERATIONS = {
+    "INSERT": "Create",
+    "SELECT": "Read",
+    "UPDATE": "Update",
+}
+_last_crud_operation = None
+def crud_operation_for(sql):
+    stripped = (sql or "").strip()
+    first_word = stripped.split(None, 1)[0].upper() if stripped else ""
+    return CRUD_OPERATIONS.get(first_word, "Other")
+def execute_crud(cur, sql, params=None):
+    global _last_crud_operation
+    _last_crud_operation = crud_operation_for(sql)
+    cur.execute(sql, params)
+def reset_crud_tracking():
+    global _last_crud_operation
+    _last_crud_operation = None
+    # --- OPERATIONAL ALERT COOLDOWN AND SNS ALERTING ---
 def _should_publish_alert(failure_category):
+    """Determine whether an alert may be published for the category."""
     now = datetime.now(timezone.utc)
     last_alert_time = _last_alert_times.get(failure_category)
 
@@ -266,24 +323,22 @@ def _should_publish_alert(failure_category):
             )
             return False
     return True
-
 def _record_alert_time(failed_category):
     _last_alert_times[failed_category] = datetime.now(timezone.utc)
-
 def _publish_operational_alert(subject, message, failure_category):
-    if not SNS_TOPIC_ARN:
+    if not OPERATIONAL_SNS_TOPIC_ARN:
         logging.error(
-            "SNS_TOPIC_ARN is not configured. Cannot publish alert for category '%s'.",
+            "OPERATIONAL_SNS_TOPIC_ARN is not configured. Cannot publish alert for category '%s'.",
             failure_category,
         )
         return False
-
     if not _should_publish_alert(failure_category):
         return False
-
+    if WARNING_INFO:
+        message = f"{message}\n\n{WARNING_INFO}"
     try:
         sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
+            TopicArn=OPERATIONAL_SNS_TOPIC_ARN,
             Subject=subject[:100],
             Message=message,
             MessageAttributes={
@@ -293,108 +348,189 @@ def _publish_operational_alert(subject, message, failure_category):
                 }
             },
         )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSNotificationsSent",
+            value=1
+        )
         _record_alert_time(failure_category)
         logger.info(
             "Published alert to SNS topic '%s' for category '%s'.",
-            SNS_TOPIC_ARN,
+            OPERATIONAL_SNS_TOPIC_ARN,
             failure_category,
         )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="ActiveIncidents",
+            value=1,
+            dimensions=[{"Name": "FailureCategory", "Value": failure_category}]
+        )
         return True
-
     except Exception:
         logging.error(
             "Failed to publish alert to SNS topic '%s' for category '%s'.",
-            SNS_TOPIC_ARN,
+            OPERATIONAL_SNS_TOPIC_ARN,
             failure_category,
             exc_info=True,
         )
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSPublishFailures",
+            value=1
+        )
         return False
-
-def notify_database_connection_failure(failure_category, error_message):
+def notify_database_connection_failure(failure_category, error_message, context=None):
     request_id = (
-        getattr(globals().get("context"), "aws_request_id", None)
-        if globals().get("context")
+        getattr(context, "aws_request_id", None)
+        if context
         else None
     )
-    message = (
-        f"CRITICAL: manifest processing failed for category '{failure_category}' due to database connection error.\n"
-        f"Failure category: {failure_category}\n"
-        f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
-        f"AWS Region: {AWS_REGION}\n"
-        f"Lambda request ID: {request_id}\n"
-        f"Database host: {DB_HOST}\n"
-        f"Error type: {type(error_message).__name__}\n"
-        f"Error message: {str(error_message)}\n"
-        "Requested action: Check Aurora database connectivity and credentials.\n"
-        "security groups, VPC settings, and database availability.\n"
-    )
+    if FAILURE_MESSAGE_TYPE:
+        try:
+            message = FAILURE_MESSAGE_TYPE.format(
+                failure_type=failure_category,
+                error=str(error_message),
+            )
+        except (KeyError, IndexError, ValueError):
+            logger.warning(
+                "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
+                "placeholder in the template); falling back to the built-in "
+                "message text."
+            )
+            message = None
+    else:
+        message = None
+    if message is None:
+        message = (
+            f"CRITICAL: manifest processing failed for category '{failure_category}' due to database connection error.\n"
+            f"Failure category: {failure_category}\n"
+            f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+            f"AWS Region: {AWS_REGION}\n"
+            f"Lambda request ID: {request_id}\n"
+            f"Database host: {DB_HOST}\n"
+            f"Error type: {type(error_message).__name__}\n"
+            f"Error message: {str(error_message)}\n"
+            "Requested action: Check Aurora database connectivity, credentials, "
+            "security groups, VPC settings, and database availability.\n"
+        )
     return _publish_operational_alert(
-        subject=f"CRITICAL: Database Connection Failure for category '{failure_category}'",
+        subject=f"CRITICAL: Manifest processing failed due to database connection error",
         message=message,
         failure_category="Database Connection Failure",
     )
-
 def notify_sqs_publish_failure(error, context=None):
     request_id = (
         getattr(context, "aws_request_id", None)
         if context
         else None
     )
-    message = (
-        "CRITICAL: Manifest processing failed due to SQS publish error.\n"
-        "Failure category: SQS Publish Failure\n"
-        f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
-        f"AWS Region: {AWS_REGION}\n"
-        f"Lambda request ID: {request_id}\n"
-        f"Database host: {DB_HOST}\n"
-        f"Error type: {type(error).__name__}\n"
-        f"Error message: {str(error)}\n"
-        "Requested action: Check Aurora database connectivity and credentials.\n"
-        "security groups, VPC settings, and database availability.\n"
-    )
+    if FAILURE_MESSAGE_TYPE:
+        try:
+            message = FAILURE_MESSAGE_TYPE.format(
+                failure_type="SQS Publish Failure",
+                error=str(error),
+            )
+        except (KeyError, IndexError, ValueError):
+            logger.warning(
+                "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
+                "placeholder in the template); falling back to the built-in "
+                "message text."
+            )
+            message = None
+    else:
+        message = None
+
+    if message is None:
+        message = (
+            "CRITICAL: Manifest processing failed due to SQS publish error.\n"
+            "Failure category: SQS Publish Failure\n"
+            f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+            f"AWS Region: {AWS_REGION}\n"
+            f"Lambda request ID: {request_id}\n"
+            f"Queue URL: {METADATA_QUEUE_URL}\n"
+            f"Error type: {type(error).__name__}\n"
+            f"Error message: {str(error)}\n"
+            "Requested action: Check that the queue URL is correct, the Lambda role "
+            "has sqs:SendMessage permission on the queue, and the queue exists and is available.\n"
+        )
     return _publish_operational_alert(
-        subject="CRITICAL: SQS Publish Failure",
+        subject=f"CRITICAL: Manifest processing failed due to SQS publish error",
         message=message,
         failure_category="SQS Publish Failure",
     )
-
 def route_critical_failure_notification(error, context=None):
     if isinstance(error, DatabaseConnectionError):
-        return notify_database_connection_failure("Database Connection Failure", error)
+        return notify_database_connection_failure("Database Connection Failure", error, context)
     if isinstance(error, SQSPublishError):
         return notify_sqs_publish_failure(error, context)
-
     logging.debug(
         "Error message does not match any known critical failure types. No alert will be sent. "
         "Error type: %s",
         type(error).__name__,
     )
     return False
-
-
-def get_conn():
-	try:
-		secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
-		creds = json.loads(secret['SecretString'])
-
-		return psycopg2.connect(
-			host=DB_HOST,
-			port=DB_PORT,
-			dbname=DB_NAME,
-			user=creds['username'],
-			password=creds['password'],
-			connect_timeout=10,
-		)
-	except Exception as error:
-		logging.exception("Unable to connect to the database: %s", str(error))
-
-		raise DatabaseConnectionError(
+    # ---ESTABLISHING CONNECTION TO DATABASE---
+def get_conn(publish_failure_metric=True):
+    try:
+        secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+        creds = json.loads(secret['SecretString'])
+        return psycopg2.connect(
+            host            =DB_HOST,
+            port            =DB_PORT,
+            dbname          =DB_NAME,
+            user            =creds['username'],
+            password        =creds['password'],
+            connect_timeout =10,
+        )
+    except Exception as error:
+        logging.exception("Unable to connect to the database: %s", str(error))
+        if publish_failure_metric:
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name="DatabaseConnectionFailures",
+                value=1
+            )
+        raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
-  		) from error
-
-
-# SQS MESSAGE HELPERS
-
+        ) from error
+    # ---ONE SHARED DATABASE CONNECTION PER INVOCATION (one per file arrival)---
+    # The secret is read from Secrets Manager once, when this connection is opened,
+    # and the connection is closed at the end of every invocation. The next file
+    # arrival opens a new connection with a fresh read of the secret, so a rotated
+    # password is always picked up. If the connection fails, it is not retried
+    # again in the same invocation.
+_shared_conn = {"conn": None, "failed": False}
+def get_shared_conn():
+    if _shared_conn["failed"]:
+        raise DatabaseConnectionError(
+            "Manifest processing failed due to database connection error."
+        )
+    conn = _shared_conn["conn"]
+    if conn is None:
+        try:
+            conn = get_conn()
+        except DatabaseConnectionError:
+            _shared_conn["failed"] = True
+            raise
+        _shared_conn["conn"] = conn
+    return conn
+def rollback_shared_conn():
+    conn = _shared_conn["conn"]
+    if conn is not None:
+        try:
+            conn.rollback()
+        except Exception as e:
+            logger.warning("Could not roll back shared database connection: %s", e)
+def close_shared_conn():
+    conn = _shared_conn["conn"]
+    _shared_conn["conn"] = None
+    _shared_conn["failed"] = False
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception as e:
+            logger.warning("Could not close shared database connection: %s", e)
+    # ---SQS MESSAGE HELPERS---
 def publish_metadata_message(message_body, message_attributes=None):
     try:
         if not METADATA_QUEUE_URL:
@@ -407,17 +543,15 @@ def publish_metadata_message(message_body, message_attributes=None):
         }
         if message_attributes:
             request["MessageAttributes"] = message_attributes
-
         return sqs.send_message(**request)
-
     except Exception as error:
         logging.exception("Unable to publish metadata message: %s", str(error))
-
         raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
-
+    # --FINDING PARTNER INFORMATION FROM DATABASE---
 def get_partner_info(cur, bucket_name):
     bucket_arn = f"arn:aws-us-gov:s3:::{bucket_name}"
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT partner_id, partner_batch_key, environment
         FROM partner_registry
@@ -429,10 +563,10 @@ def get_partner_info(cur, bucket_name):
     if not row:
         raise RuntimeError(f"No partner registered for bucket ARN {bucket_arn}")
     return row[0], row[1], row[2]
-
-
+    #---FINDING PARTNER NAME---
 def get_partner_name(cur, partner_id):
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT partner_name
         FROM partner_contact_details
@@ -443,11 +577,278 @@ def get_partner_name(cur, partner_id):
     )
     row = cur.fetchone()
     return row[0] if row else f"Partner {partner_id}"
-
-
-def update_partner_state(cur, partner_id, object_key, partner_name, payload_arrived_at):
+    # ---PARTNER NAME FOR A BUCKET (cached; used for per-partner file arrival metrics)---
+_bucket_partner_names = {}
+_bucket_partner_ids = {}
+def get_partner_name_for_bucket(bucket):
+    if bucket in _bucket_partner_names:
+        return _bucket_partner_names[bucket]
+    try:
+        conn = get_shared_conn()
+        with conn.cursor() as cur:
+            partner_id, _, _ = get_partner_info(cur, bucket)
+            partner_name = get_partner_name(cur, partner_id)
+        _bucket_partner_names[bucket] = partner_name
+        _bucket_partner_ids[bucket] = partner_id
+        return partner_name
+    except DatabaseConnectionError:
+        raise
+    except Exception as e:
+        rollback_shared_conn()
+        logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
+        return None
+    # ---TRANSFER FAMILY USER FOR AN ARRIVED FILE (read from the Transfer Family log group)---
+    # S3 gives us the bucket and file. The Transfer Family upload log line for that same
+    # file ("CLOSE" with path /<bucket>/<key>) is in a log stream named "<user>.<session-id>",
+    # so the user name comes from the stream name. The log line can arrive a few seconds
+    # after the S3 event, so the search is retried briefly.
+TRANSFER_LOG_GROUP_PREFIX = "/aws/transfer/"
+TRANSFER_LOG_LOOKBACK_SECONDS = 900
+TRANSFER_LOG_ATTEMPTS = 3
+TRANSFER_LOG_WAIT_SECONDS = 2
+_transfer_log_groups = []
+def get_transfer_log_groups():
+    if not _transfer_log_groups:
+        for page in logs.get_paginator("describe_log_groups").paginate(logGroupNamePrefix=TRANSFER_LOG_GROUP_PREFIX):
+            _transfer_log_groups.extend(g["logGroupName"] for g in page.get("logGroups", []))
+    return _transfer_log_groups
+def transfer_user_from_stream(stream_name):
+    match = re.match(r"^(?:.*/)?(.+?)(?:\.[0-9a-fA-F]{16,})?$", stream_name or "")
+    return match.group(1) if match else None
+def is_completed_upload(message, path):
+    # Works for both Transfer Family log formats:
+    #   JSON: {"activity-type":"CLOSE","path":"/<bucket>/<key>",...}
+    #   text: <user>.<session-id> CLOSE Path=/<bucket>/<key> BytesIn=...
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        activity = record.get("activity-type") or record.get("activity")
+        return activity == "CLOSE" and (record.get("path") or record.get("Path")) == path
+    exact_path = r"(?:^|[\s=])" + re.escape(path) + r"(?:\s|$)"
+    return "CLOSE" in text.split()[:3] and re.search(exact_path, text) is not None
+def find_transfer_family_user(bucket, key):
+    path = f"/{bucket}/{key}"
+    pattern = '"%s"' % path.replace('"', '\\"')
+    start_ms = int((datetime.now(timezone.utc).timestamp() - TRANSFER_LOG_LOOKBACK_SECONDS) * 1000)
+    for attempt in range(TRANSFER_LOG_ATTEMPTS):
+        for group in get_transfer_log_groups():
+            kwargs = {"logGroupName": group, "startTime": start_ms, "filterPattern": pattern}
+            for _ in range(10):
+                resp = logs.filter_log_events(**kwargs)
+                for event in resp.get("events", []):
+                    if not is_completed_upload(event.get("message"), path):
+                        continue
+                    stream_user = (event.get("logStreamName") or "").strip()
+                    if not stream_user:
+                        stream_user = ((event.get("message") or "").split() or [""])[0]
+                    user = transfer_user_from_stream(stream_user)
+                    if user:
+                        return user
+                if not resp.get("nextToken"):
+                    break
+                kwargs["nextToken"] = resp["nextToken"]
+        if attempt < TRANSFER_LOG_ATTEMPTS - 1:
+            time.sleep(TRANSFER_LOG_WAIT_SECONDS)
+    return None
+def publish_transfer_family_file_in(bucket, key, partner_id):
+    try:
+        user = find_transfer_family_user(bucket, key)
+    except Exception as e:
+        logger.warning("Could not search the Transfer Family log group for s3://%s/%s: %s", bucket, key, e)
+        user = None
+    if user is None:
+        logger.warning(
+            "Transfer Family user not found for s3://%s/%s (not uploaded through Transfer Family, "
+            "or its log line is delayed).", bucket, key
+        )
+        put_partner_metric("HIE/OperationalMonitoring", "TransferFamilyUserNotFound", partner_id, 1)
+        return None
+    logger.info(
+        "Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s | file=%s",
+        user, _bucket_partner_names.get(bucket), partner_id, bucket, key
+    )
+    put_partner_metric(
+        "HIE/OperationalMonitoring", "PartnerTransferFilesIn", partner_id, 1,
+        extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+    )
+    return user
+    # ---TRANSFER FAMILY LOGIN FAILURES PER PARTNER (Lambda invoked by a CloudWatch Logs
+    # subscription filter on AUTH_FAILURE lines of the Transfer Family log group)---
+    # A failed login has only the user name. The user's bucket comes from that user's last
+    # successful login (CONNECTED line, home-dir / HomeDir), and the bucket gives the partner.
+    # Works for both log formats:
+    #   JSON: {"activity-type":"AUTH_FAILURE","user":"Oracle",...}
+    #         {"activity-type":"CONNECTED","user":"Oracle","home-dir":"/<bucket>",...}
+    #   text: ERRORS AUTH_FAILURE Method=publickey User=Oracle ...
+    #         Oracle.<session-id> CONNECTED SourceIP=... User=Oracle HomeDir=/<bucket> ...
+TRANSFER_HOME_LOOKBACK_SECONDS = 30 * 24 * 3600
+_transfer_user_buckets = {}
+def parse_transfer_log_line(message):
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        # JSON logs use activity-type/user/home-dir; this log group's transformer
+        # produces activity/User/HomeDir.
+        return (
+            record.get("activity-type") or record.get("activity"),
+            record.get("user") or record.get("User"),
+            record.get("home-dir") or record.get("HomeDir"),
+        )
+    words = text.split()
+    activity = next((w for w in words[:3] if w in ("AUTH_FAILURE", "CONNECTED")), None)
+    user = re.search(r"(?:^|\s)User=(\S+)", text)
+    home = re.search(r"(?:^|\s)HomeDir=(\S+)", text)
+    return activity, user.group(1).strip('"') if user else None, home.group(1).strip('"') if home else None
+TRANSFER_HOME_SEARCH_WINDOWS = (3600, 24 * 3600, TRANSFER_HOME_LOOKBACK_SECONDS)
+TRANSFER_HOME_SEARCH_MAX_SECONDS = 20
+def find_transfer_user_bucket(log_group, user):
+    if user in _transfer_user_buckets:
+        return _transfer_user_buckets[user]
+    pattern = '"CONNECTED" "%s"' % user.replace('"', '\\"')
+    deadline = time.time() + TRANSFER_HOME_SEARCH_MAX_SECONDS
+    now_s = datetime.now(timezone.utc).timestamp()
+    # Newest logins first: last hour, then last day, then the full lookback.
+    for window in TRANSFER_HOME_SEARCH_WINDOWS:
+        kwargs = {
+            "logGroupName": log_group,
+            "startTime": int((now_s - window) * 1000),
+            "filterPattern": pattern,
+        }
+        bucket = None
+        while time.time() < deadline:
+            resp = logs.filter_log_events(**kwargs)
+            for event in resp.get("events", []):
+                activity, line_user, home_dir = parse_transfer_log_line(event.get("message"))
+                if activity == "CONNECTED" and line_user == user and home_dir:
+                    parts = [x for x in home_dir.split("/") if x]
+                    if parts:
+                        bucket = parts[0]
+            if not resp.get("nextToken"):
+                break
+            kwargs["nextToken"] = resp["nextToken"]
+        if bucket:
+            _transfer_user_buckets[user] = bucket
+            return bucket
+        if time.time() >= deadline:
+            break
+    return None
+def handle_transfer_login_failures(event):
+    payload = json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
+    if payload.get("messageType") != "DATA_MESSAGE":
+        return {"statusCode": 200, "body": "Control message ignored."}
+    log_group = payload.get("logGroup")
+    counted = 0
+    for log_event in payload.get("logEvents", []):
+        activity, user, _ = parse_transfer_log_line(log_event.get("message"))
+        if activity != "AUTH_FAILURE":
+            continue
+        user = user or "Unknown"
+        partner_id = None
+        bucket = None
+        try:
+            if user != "Unknown":
+                bucket = find_transfer_user_bucket(log_group, user)
+            if bucket:
+                get_partner_name_for_bucket(bucket)
+                partner_id = _bucket_partner_ids.get(bucket)
+        except Exception as e:
+            rollback_shared_conn()
+            logger.warning("Could not find the partner for Transfer Family user %s: %s", user, e)
+        if partner_id is None:
+            if user == "Unknown":
+                reason = "no user name in the AUTH_FAILURE line"
+            elif not bucket:
+                reason = "no earlier successful login (CONNECTED with home folder) found in %s" % log_group
+            else:
+                reason = "bucket %s is not registered in partner_registry" % bucket
+            logger.warning(
+                "Login failure for Transfer Family user %s could not be matched to a partner: %s. "
+                "Counted under All only.", user, reason
+            )
+        else:
+            logger.info(
+                "Login failure | Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s",
+                user, _bucket_partner_names.get(bucket), partner_id, bucket
+            )
+        put_partner_metric(
+            "HIE/OperationalMonitoring", "PartnerLoginFailures", partner_id, 1,
+            extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+        )
+        counted += 1
+    return {"statusCode": 200, "body": f"Login failures counted: {counted}"}
+    # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
+_registered_partner_count = {"value": None, "at": None}
+def get_registered_partner_count():
+    now = datetime.now(timezone.utc)
+    cached_at = _registered_partner_count["at"]
+    if cached_at and (now - cached_at).total_seconds() < 900:
+        return _registered_partner_count["value"]
+    try:
+        conn = get_shared_conn()
+        with conn.cursor() as cur:
+            execute_crud(cur, "SELECT COUNT(*) FROM partner_registry")
+            row = cur.fetchone()
+        _registered_partner_count["value"] = row[0] if row else None
+        _registered_partner_count["at"] = now
+    except DatabaseConnectionError:
+        raise
+    except Exception as e:
+        rollback_shared_conn()
+        logger.warning("Could not count registered partners: %s", e)
+    return _registered_partner_count["value"]
+    # ---KEEP THE DASHBOARD PARTNER DROPDOWN IN SYNC WITH THE DATABASE (checked at most every 15 min)---
+def update_partner_dropdown():
+    if not DASHBOARD_NAME:
+        return
+    now = datetime.now(timezone.utc)
+    checked_at = _dropdown_checked["at"]
+    if checked_at and (now - checked_at).total_seconds() < 900:
+        return
+    try:
+        conn = get_shared_conn()
+        with conn.cursor() as cur:
+            execute_crud(
+                cur,
+                """
+                SELECT DISTINCT ON (r.partner_id) r.partner_id, c.partner_name
+                FROM partner_registry r
+                LEFT JOIN partner_contact_details c ON c.partner_id = r.partner_id
+                ORDER BY r.partner_id
+                """
+            )
+            rows = cur.fetchall()
+        partners = sorted(
+            ({"value": str(pid), "label": name or f"Partner {pid}"} for pid, name in rows),
+            key=lambda p: p["label"].lower()
+        )
+        new_values = [{"value": "All", "label": "All"}] + partners
+        body = json.loads(cloudwatch.get_dashboard(DashboardName=DASHBOARD_NAME)["DashboardBody"])
+        changed = False
+        for variable in body.get("variables", []):
+            if variable.get("id") == "partner" and variable.get("values") != new_values:
+                variable["values"] = new_values
+                variable.pop("search", None)
+                variable.pop("populateFrom", None)
+                changed = True
+        if changed:
+            cloudwatch.put_dashboard(DashboardName=DASHBOARD_NAME, DashboardBody=json.dumps(body))
+            logger.info("Partner dropdown updated with %d partner(s).", len(partners))
+        _dropdown_checked["at"] = now
+    except Exception as e:
+        rollback_shared_conn()
+        logger.warning("Could not update partner dropdown: %s", e)
+    # --- PARTNER TRANSMISSION STATE TRACKING ---
+def update_partner_state(cur, partner_id, object_key, partner_name=None, payload_arrived_at=None):
     # Use the last S3 object arrival time for the completed payload, not Lambda execution time.
     now = datetime.now(timezone.utc)
+    if payload_arrived_at is None:
+        payload_arrived_at = now
     if isinstance(payload_arrived_at, str):
         payload_arrived_at = datetime.fromisoformat(payload_arrived_at.replace("Z", "+00:00"))
     if payload_arrived_at.tzinfo is None:
@@ -457,9 +858,9 @@ def update_partner_state(cur, partner_id, object_key, partner_name, payload_arri
     batch_id = extract_batch_id(filename)
     batch_prefix = f"{batch_id}_"
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
-
-    # Read the previous transmission timestamp before updating it.
-    cur.execute(
+    # Read the previous transmission timestamp before updating it (row is locked).
+    execute_crud(
+        cur,
         """
         SELECT last_seen_at
         FROM partner_transmission_state
@@ -468,9 +869,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name, payload_arri
         """,
         (partner_id,),
     )
-    previous_row = cur.fetchone()
-
-    previous_last_seen_at = previous_row[0] if previous_row else None
+    existing_row = cur.fetchone()
+    previous_last_seen_at = existing_row[0] if existing_row else None
     if previous_last_seen_at is not None:
         if previous_last_seen_at.tzinfo is None:
             previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
@@ -484,10 +884,10 @@ def update_partner_state(cur, partner_id, object_key, partner_name, payload_arri
                 previous_last_seen_at.isoformat(),
             )
             return {"status": "STALE", "partner_name": partner_name, "batch_id": batch_id}
-
     # Only advance state for a newer completed payload.
-    if previous_row:
-        cur.execute(
+    if existing_row:
+        execute_crud(
+            cur,
             """
             UPDATE partner_transmission_state
             SET last_seen_at = %s,
@@ -499,17 +899,30 @@ def update_partner_state(cur, partner_id, object_key, partner_name, payload_arri
             (payload_arrived_at, batch_id, clean_filename, now, partner_id),
         )
     else:
-        cur.execute(
+        execute_crud(
+            cur,
             """
             INSERT INTO partner_transmission_state(
-                partner_id, last_seen_at, batch_id, last_object_key, updated_at
-            ) VALUES (%s,%s,%s,%s,%s)
+                partner_id,
+                last_seen_at,
+                batch_id,
+                last_object_key,
+                updated_at
+            )
+            VALUES (%s,%s,%s,%s,%s)
             """,
             (partner_id, payload_arrived_at, batch_id, clean_filename, now),
         )
-
+    put_metric(
+        namespace="HIE/PartnerMonitoring",
+        metric_name="PartnerTransmissionReceived",
+        value=1,
+        unit="Count",
+        dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+    )
     # Read the configured SLA even for the first transmission.
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT expected_interval_seconds
         FROM partner_schedule
@@ -519,17 +932,23 @@ def update_partner_state(cur, partner_id, object_key, partner_name, payload_arri
     )
     schedule_row = cur.fetchone()
     if not schedule_row or schedule_row[0] is None or schedule_row[0] <= 0:
-        raise ValueError(f"Missing or invalid SLA for partner_id={partner_id}")
+        # Do not fail the batch: state is saved, only the ON_TIME/BREACH check is skipped.
+        logger.warning(
+            "Missing or invalid SLA for partner_id=%s -- ON_TIME/BREACH check skipped "
+            "for batch_id=%s. Set expected_interval_seconds in partner_schedule.",
+            partner_id, batch_id,
+        )
+        return None
     expected_interval_seconds = schedule_row[0]
-
     # The first payload establishes a baseline; it cannot be classified by gap.
     if previous_last_seen_at is None:
         return None
-
     gap_seconds = (payload_arrived_at - previous_last_seen_at).total_seconds()
     if gap_seconds < 0:
         raise ValueError(f"Negative payload gap for partner_id={partner_id}")
-
+    if gap_seconds > expected_interval_seconds * 1.5:
+        # ---STALE CONNECTION PER PARTNER ID + "All"---
+        put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
     return {
         "partner_name": partner_name,
         "batch_id": batch_id,
@@ -537,10 +956,10 @@ def update_partner_state(cur, partner_id, object_key, partner_name, payload_arri
         "expected_interval_seconds": expected_interval_seconds,
         "status": "ON_TIME" if gap_seconds <= expected_interval_seconds else "BREACH",
     }
-
-
+    # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id):
-    cur.execute(
+    execute_crud(
+        cur,
         """
         SELECT breach_flag
         FROM partner_schedule
@@ -549,14 +968,29 @@ def clear_breach_flag(cur, partner_id):
         (partner_id,),
     )
     row = cur.fetchone()
-	
     if row is None:
-        raise ValueError(
-            f"No partner_schedule configuration found for partner_id={partner_id}"
+        execute_crud(
+            cur,
+            """
+            INSERT INTO partner_schedule(
+                partner_id,
+                breach_flag,
+                last_alert_at,
+                updated_at
+            )
+            VALUES (%s, FALSE, NOW(), NOW())
+            """,
+            (partner_id,),
         )
-
+        logger.info(
+            "No partner_schedule row existed for partner_id=%s -- created one "
+            "(first successful batch).",
+            partner_id
+        )
+        return False
     if row[0]:
-        cur.execute(
+        execute_crud(
+            cur,
             """
             UPDATE partner_schedule
             SET breach_flag = FALSE,
@@ -568,7 +1002,8 @@ def clear_breach_flag(cur, partner_id):
         )
         logger.info("Recovery detected. Breach cleared for partner_id=%s", partner_id)
         return True
-    cur.execute(
+    execute_crud(
+        cur,
         """
         UPDATE partner_schedule
         SET breach_flag = FALSE,
@@ -583,8 +1018,7 @@ def clear_breach_flag(cur, partner_id):
         partner_id
     )
     return False
-
-
+    # --- SNS MESSAGE TEMPLATE RENDERING ---
 def render_sns_template(template, partner_name, environment):
     rendered = template.replace("$PARTNER_NAME", str(partner_name)).replace(
         "$ENVIRONMENT", str(environment)
@@ -594,11 +1028,10 @@ def render_sns_template(template, partner_name, environment):
     except (KeyError, IndexError):
         pass
     return rendered
-
-
+    # --- RECOVERY SNS NOTIFICATION ---
 def send_recovery_sns(partner_name, partner_id, environment):
-    if not SNS_TOPIC_ARN:
-        logger.warning("SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
+    if not RECOVERY_SNS_TOPIC_ARN:
+        logger.warning("RECOVERY_SNS_TOPIC_ARN is not configured. Skipping recovery SNS.")
         return
     try:
         subject = render_sns_template(SNS_SUBJECT_TEMPLATE, partner_name, environment)
@@ -606,7 +1039,7 @@ def send_recovery_sns(partner_name, partner_id, environment):
         if WARNING_INFO:
             message = f"{message}\n\n{WARNING_INFO}"
         sns.publish(
-            TopicArn=SNS_TOPIC_ARN,
+            TopicArn=RECOVERY_SNS_TOPIC_ARN,
             Subject=subject,
             Message=message,
         )
@@ -621,10 +1054,14 @@ def send_recovery_sns(partner_name, partner_id, environment):
             "SNS notification failed for partner_id=%s, but database changes were already committed.",
             partner_id,
         )
-
-
-# FILE VALIDATION AND COUNTING
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSPublishFailures",
+            value=1
+        )
+    # ---FILE VALIDATION AND COUNTING---
 def read_manifest_expected_counts(bucket, key):
+    """Read the manifest file and extract expected counts."""
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
     counts = {}
@@ -639,16 +1076,13 @@ def read_manifest_expected_counts(bucket, key):
     if not counts:
         raise ValueError(f"Manifest contains no counts: {key}")
     return counts
-
-
+    # --- S3 RANGE READER FOR ZIP FILES ---
 class _S3RangeReader:
-
     def __init__(self, bucket, key, size):
         self._bucket = bucket
         self._key = key
         self._size = size
         self._pos = 0
-
     def read(self, size=-1):
         if size is None or size < 0:
             end = self._size - 1
@@ -664,7 +1098,6 @@ class _S3RangeReader:
         data = resp["Body"].read()
         self._pos += len(data)
         return data
-
     def seek(self, offset, whence=0):
         if whence == 0:
             self._pos = offset
@@ -675,20 +1108,14 @@ class _S3RangeReader:
         else:
             raise ValueError(f"Unsupported whence: {whence}")
         return self._pos
-
     def tell(self):
         return self._pos
-
     def seekable(self):
         return True
-
-
 def count_zip(bucket, key):
     size = s3.head_object(Bucket=bucket, Key=key)["ContentLength"]
     with zipfile.ZipFile(_S3RangeReader(bucket, key, size)) as z:
         return len([f for f in z.namelist() if not f.endswith("/")])
-
-
 def count_report_rows(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
@@ -696,8 +1123,7 @@ def count_report_rows(bucket, key):
     if not lines:
         return 0
     return sum(1 for line in lines[1:] if line.strip())
-
-
+    # --- RECEIVED REPORT ROW EXTRACTION ---
 def extract_received_report_rows(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
@@ -729,8 +1155,7 @@ def extract_received_report_rows(bucket, key):
             "ccda_file": parts[14],
         })
     return rows
-
-
+    # --- DISCLOSURE REPORT ROW EXTRACTION ---
 def extract_disclosure_report_rows(bucket, key):
     obj = s3.get_object(Bucket=bucket, Key=key)
     content = obj["Body"].read().decode("utf-8")
@@ -765,9 +1190,7 @@ def extract_disclosure_report_rows(bucket, key):
             "commonwell_indicator": parts[17],
         })
     return rows
-
-
-# SQS MESSAGE BUILDERS
+    # ---SQS MESSAGE BUILDERS---
 def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta, zip_meta,
                                      manifest_expected_counts, partner_context):
     zip_actual_count = count_zip(bucket, zip_meta["key"])
@@ -786,7 +1209,6 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             metric_name="CountMismatchEvents",
             value=1
         )
-
     return {
         "message_type": "MANIFEST_METADATA_UPSERT",
         "schema_version": "2.0",
@@ -819,8 +1241,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "bytes_in": bytes_in
         }
     }
-
-
+    # --- PARTNER SCHEDULE LEARNING SUPPORT ---
 def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta,
                                            manifest_expected_counts, partner_context):
     report_key = report_meta["key"]
@@ -836,14 +1257,12 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
     }
     bytes_in = sum(item.get("size_bytes", 0) for item in file_metadata.values() if item)
     validation_status = "READY_FOR_DATABASE_SQS_INSERT" if report_matches_manifest else "COUNT_MISMATCH"
-
     if not report_matches_manifest:
         put_metric(
             namespace="HIE/OperationalMonitoring",
             metric_name="CountMismatchEvents",
             value=1
         )
-
     return {
         "message_type": "PATIENT_REPORT_METADATA_UPSERT",
         "schema_version": "2.0",
@@ -883,19 +1302,20 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "files_in": report_actual_count
         }
     }
-
-
+    # --- PARTNER STATE AND BREACH SYNCHRONIZATION ---
 def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start):
     conn = None
     partner_id = partner_batch_key = environment = partner_name = None
     breach_cleared = False
+    not_in_breach_count = None
     on_time_transmission = None
+    is_stale = False
+    reset_crud_tracking()
     try:
-        conn = get_conn()
+        conn = get_shared_conn()
         with conn.cursor() as cur:
             partner_id, partner_batch_key, environment = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
-
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
             on_time_transmission = update_partner_state(
@@ -903,13 +1323,30 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 partner_id,
                 latest_meta["key"],
                 partner_name,
-                latest_meta["last_modified_utc"]
+                latest_meta.get("last_modified_utc")
             )
-
-
-            if not (on_time_transmission and on_time_transmission.get("status") == "STALE"):
+            is_stale = bool(on_time_transmission and on_time_transmission.get("status") == "STALE")
+            if not is_stale:
                 breach_cleared = clear_breach_flag(cur, partner_id)
         conn.commit()
+        # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
+        try:
+            with conn.cursor() as cur:
+                execute_crud(
+                    cur,
+                    """
+                    SELECT COUNT(*)
+                    FROM partner_schedule
+                    WHERE breach_flag = FALSE
+                    """
+                )
+                row = cur.fetchone()
+                not_in_breach_count = row[0] if row else None
+        except Exception as count_error:
+            rollback_shared_conn()
+            logger.warning("Could not count partners not in breach: %s", count_error)
+            if isinstance(count_error, psycopg2.Error):
+                put_failure_metric("CRUDFailureEvents", "Read", partner_id)
     except Exception as e:
         if conn:
             conn.rollback()
@@ -918,36 +1355,36 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             metric_name="CRUDFailures",
             value=1
         )
-        put_metric(
-            namespace="HIE/PartnerMonitoring",
-            metric_name="Errors",
-            value=1,
-            unit="Count",
-            dimensions=[{"Name": "PartnerName", "Value": partner_name or "Unknown"}]
+        # ---CRUD FAILURE CLASSIFICATION (Create / Read / Update / Delete)---
+        if isinstance(e, DatabaseConnectionError):
+            crud_failure_type = "DatabaseConnectionFailure"
+        elif isinstance(e, psycopg2.Error) and _last_crud_operation:
+            crud_failure_type = _last_crud_operation
+        else:
+            crud_failure_type = "OtherFailure"
+        logger.error(
+            "CRUD failure | operation=%s | cause=%s | batch_id=%s",
+            crud_failure_type,
+            type(e).__name__,
+            batch_id,
         )
+        put_failure_metric("CRUDFailureEvents", crud_failure_type, partner_id)
+        put_partner_metric("HIE/PartnerMonitoring", "Errors", partner_id, 1)
         logger.exception(
             "Partner-state/breach-flag sync failed for bucket=%s batch_id=%s "
             "(alert will be sent by lambda_handler)",
             bucket,
-            batch_id,
+            batch_id
         )
         raise
-    finally:
-        if conn:
-            conn.close()
-
-    # Publish the classification only after the database transaction commits.
-    if on_time_transmission is not None and on_time_transmission["status"] != "STALE":
+    # Publish the ON_TIME / BREACH classification only after the database transaction commits.
+    if on_time_transmission is not None and not is_stale:
         status = on_time_transmission["status"]
-        put_metric(
-            namespace="HIE/PartnerMonitoring",
-            metric_name=("OnTimeTransmissions" if status == "ON_TIME"
-                         else "DelayedTransmissions"),
-            value=1,
-            unit="Count",
-            dimensions=[
-                {"Name": "PartnerName", "Value": str(on_time_transmission["partner_name"])}
-            ],
+        put_partner_metric(
+            "HIE/PartnerMonitoring",
+            "OnTimeTransmissions" if status == "ON_TIME" else "DelayedTransmissions",
+            partner_id,
+            1
         )
         logger.info(
             "TransmissionStatus partner_name=%s batch_id=%s status=%s "
@@ -958,7 +1395,6 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             on_time_transmission["gap_seconds"],
             on_time_transmission["expected_interval_seconds"],
         )
-
     if breach_cleared:
         logger.info(
             "PartnerRecovery "
@@ -967,34 +1403,45 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             "batch_id=%s "
             "status=RECOVERED "
             "breach_flag=FALSE",
-            partner_name.replace(" ", "_"),
+            str(partner_name).replace(" ", "_"),
             partner_id,
             batch_id
         )
-
         send_recovery_sns(partner_name, partner_id, environment)
-
-    if not (on_time_transmission and on_time_transmission.get("status") == "STALE"):
-        put_metric(
-            namespace="HIE/PartnerMonitoring",
-            metric_name="PartnerRecovered",
-            value=1 if breach_cleared else 0,
-            unit="Count",
-            dimensions=[{"Name": "PartnerName", "Value": partner_name}]
-        )
-
+    if is_stale:
+        # Duplicate/out-of-order payload: state and breach flag were not changed.
+        return {
+            "partner_id": partner_id,
+            "partner_batch_key": partner_batch_key,
+            "environment": environment,
+            "partner_name": partner_name,
+        }
+    put_partner_metric("HIE/PartnerMonitoring", "PartnerRecovered", partner_id, 1 if breach_cleared else 0)
+    # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
+    # Sent per PartnerId and as "All" (value = number of registered partners not in breach).
+    all_not_in_breach = not_in_breach_count if not_in_breach_count is not None else 1
+    put_partner_metric("HIE/PartnerMonitoring", "PartnerNotInBreach", partner_id, 1, all_value=all_not_in_breach)
+    # Kept only so the dashboard "Transfer Family user" dropdown keeps its "All" option.
+    put_metric(
+        namespace="HIE/PartnerMonitoring",
+        metric_name="PartnerNotInBreach",
+        value=all_not_in_breach,
+        unit="Count",
+        dimensions=[
+            {"Name": "PartnerName", "Value": "All"},
+            {"Name": "PartnerId", "Value": "All"}
+        ]
+    )
     return {
         "partner_id": partner_id,
         "partner_batch_key": partner_batch_key,
         "environment": environment,
         "partner_name": partner_name,
     }
-
-
+    # --- METADATA MESSAGE ORCHESTRATION ---
 def build_metadata_messages(bucket, trigger_key, processing_start):
     filename = os.path.basename(trigger_key)
     batch_id = extract_batch_id(filename)
-
     batch_type = classify_batch_type(filename)
     if batch_type is None:
         logger.warning(
@@ -1011,7 +1458,6 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
             value=1
         )
         return None
-
     manifest_key, report_key, zip_key = find_available_keys(bucket, batch_id, batch_type)
     logger.info(
         "Batch %s | type=%s | availability: manifest=%s report=%s zip=%s",
@@ -1021,7 +1467,6 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         bool(report_key),
         bool(zip_key)
     )
-
     if not manifest_key or not report_key or not zip_key:
         missing_files = []
         if not manifest_key:
@@ -1037,15 +1482,13 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
             ", ".join(missing_files)
         )
         return None
-
     if is_batch_already_sent(bucket, manifest_key):
         logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type)
         return None
-
+    log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_key, report_key, zip_key)
     manifest_meta = get_object_metadata(bucket, manifest_key)
     report_meta = get_object_metadata(bucket, report_key)
     zip_meta = get_object_metadata(bucket, zip_key)
-
     manifest_expected_counts = read_manifest_expected_counts(bucket, manifest_key)
     logger.info(
         "Batch %s | type=%s | Manifest expected counts | CCDA=%d | REPORT=%d",
@@ -1054,11 +1497,9 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         manifest_expected_counts.get("CCDA", 0),
         manifest_expected_counts.get("REPORT", 0),
     )
-
     partner_context = sync_partner_state_and_breach_flag(
         bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start
     )
-
     manifest_message = build_manifest_metadata_message(
         bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context
     )
@@ -1066,10 +1507,9 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta, manifest_expected_counts, partner_context
     )
     return manifest_message, report_message, manifest_key
-
-
-# SQS SENDER
+    # ---SQS SENDER---
 def send_metadata_to_sqs(message):
+    """Send a metadata message to SQS."""
     message_body = json.dumps(message, default=str)
     send_args = {
         "QueueUrl": METADATA_QUEUE_URL,
@@ -1107,7 +1547,6 @@ def send_metadata_to_sqs(message):
             message["message_type"]
         )
         raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="MetadataMessageTypesSentToSQS",
@@ -1120,42 +1559,73 @@ def send_metadata_to_sqs(message):
         value=message["metrics"]["bytes_in"],
         unit="Bytes"
     )
-    partner_name = message.get("partner", {}).get("partner_name")
-    if partner_name:
+    partner_id = message.get("partner", {}).get("partner_id")
+    if partner_id is not None:
         put_metric(
             namespace="HIE/PartnerMonitoring",
             metric_name="BytesIn",
             value=message["metrics"]["bytes_in"],
             unit="Bytes",
-            dimensions=[{"Name": "PartnerName", "Value": partner_name}]
+            dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
         )
         if message["message_type"] == "PATIENT_REPORT_METADATA_UPSERT":
-            put_metric(
-                namespace="HIE/PartnerMonitoring",
-                metric_name="FilesIn",
-                value=message["metrics"].get("files_in", 0),
-                unit="Count",
-                dimensions=[{"Name": "PartnerName", "Value": partner_name}]
+            # ---FILES IN/OUT PER PARTNER ID + "All"---
+            put_partner_metric(
+                "HIE/PartnerMonitoring",
+                "FilesOut" if message.get("direction") == "outbound" else "FilesIn",
+                partner_id,
+                message["metrics"].get("files_in", 0)
             )
-
     return response
-
-
-# CLOUDWATCH METRICS
+    # ---CLOUDWATCH METRICS---
 def put_metric(namespace, metric_name, value, unit="Count", dimensions=None):
     try:
-        metric = {"MetricName": metric_name, "Value": value, "Unit": unit}
+        metric_data = {
+            "MetricName": metric_name,
+            "Value": value,
+            "Unit": unit,
+        }
         if dimensions:
-            metric["Dimensions"] = dimensions
+            metric_data["Dimensions"] = dimensions
         cloudwatch.put_metric_data(
             Namespace=namespace,
-            MetricData=[metric]
+            MetricData=[metric_data]
         )
     except Exception as e:
-        logger.warning("Failed to publish CloudWatch metric %s: %s", metric_name, e)
-
-
-# MAIN OBJECT PROCESSOR
+        logger.warning("Failed to publish metric %s: %s", metric_name, e)
+def put_partner_metric(namespace, metric_name, partner_id, value, all_value=None, unit="Count", extra_dimensions=None):
+    """Publish a per-partner metric keyed by PartnerId only, plus the "All" total."""
+    extra = extra_dimensions or []
+    if partner_id is not None:
+        put_metric(
+            namespace=namespace,
+            metric_name=metric_name,
+            value=value,
+            unit=unit,
+            dimensions=extra + [{"Name": "PartnerId", "Value": str(partner_id)}]
+        )
+    put_metric(
+        namespace=namespace,
+        metric_name=metric_name,
+        value=value if all_value is None else all_value,
+        unit=unit,
+        dimensions=extra + [{"Name": "PartnerId", "Value": "All"}]
+    )
+def put_failure_metric(metric_name, failure_type=None, partner_id=None):
+    """Publish a failure metric tagged with this Lambda's name and failure type."""
+    dimensions = [{"Name": "FunctionName", "Value": FUNCTION_NAME}]
+    if failure_type:
+        dimensions.append({"Name": "FailureType", "Value": failure_type})
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name=metric_name,
+        value=1,
+        dimensions=dimensions
+    )
+    # ---CRUD FAILURES PER PARTNER ID (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
+    if metric_name == "CRUDFailureEvents":
+        put_partner_metric("HIE/OperationalMonitoring", metric_name, partner_id, 1, extra_dimensions=dimensions)
+    # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
     event_time = datetime.fromisoformat(
@@ -1170,42 +1640,50 @@ def process_object(bucket, key, record):
         unit="Seconds"
     )
     logger.info("Processing delay=%s seconds", processing_delay)
-
+    if not is_target_file(filename):
+        logger.info("Skipping non-target file: %s", filename)
+        return {"processed": False, "reason": "NON_TARGET_FILE"}
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="S3ObjectArrivals",
         value=1
     )
-
-    if not is_target_file(filename):
-        logger.info("Skipping non-target file: %s", filename)
-        return {"processed": False, "reason": "NON_TARGET_FILE"}
-
+    # ---S3 OBJECT ARRIVALS PER PARTNER ID + "All"---
+    get_partner_name_for_bucket(bucket)
+    arrival_partner_id = _bucket_partner_ids.get(bucket)
+    put_partner_metric("HIE/OperationalMonitoring", "S3ObjectArrivals", arrival_partner_id, 1)
+    # ---TRANSFER FAMILY USER -> PARTNER, FILES IN PER PARTNER ID + "All"---
+    publish_transfer_family_file_in(bucket, key, arrival_partner_id)
+    # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
+    registered_partner_count = get_registered_partner_count()
+    for _pid, _value in ((arrival_partner_id, 1), ("All", registered_partner_count)):
+        if _pid is not None and _value:
+            put_metric(
+                namespace="HIE/OperationalMonitoring",
+                metric_name="RegisteredPartners",
+                value=_value,
+                dimensions=[{"Name": "PartnerId", "Value": str(_pid)}]
+            )
     result = build_metadata_messages(bucket, key, processing_start)
     if result is None:
         return {"processed": False, "reason": "BATCH_NOT_READY_OR_ALREADY_SENT"}
     manifest_message, report_message, manifest_key = result
-
     batch_id = manifest_message["source"]["batch_id"]
-
     if not is_message_already_sent(bucket, manifest_key, MANIFEST_SENT_TAG_KEY):
         send_metadata_to_sqs(manifest_message)
         mark_message_as_sent(bucket, manifest_key, MANIFEST_SENT_TAG_KEY)
     else:
         logger.info("Batch %s | manifest message already sent, skipping duplicate send.", batch_id)
-
     if not is_message_already_sent(bucket, manifest_key, REPORT_SENT_TAG_KEY):
         send_metadata_to_sqs(report_message)
         mark_message_as_sent(bucket, manifest_key, REPORT_SENT_TAG_KEY)
     else:
         logger.info("Batch %s | report message already sent, skipping duplicate send.", batch_id)
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="MetadataMessagesSentToSQS",
         value=1
     )
-
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="ArchiveStatus",
@@ -1220,13 +1698,26 @@ def process_object(bucket, key, record):
         "reason": "METADATA_SENT_TO_SQS",
         "batch_id": manifest_message["source"]["batch_id"]
     }
-
-
-# LAMBDA ENTRY
+    # ---MAIN LAMBDA HANDLER---
 def lambda_handler(event, context):
+    logger.info("Main Lambda handler.")
+    close_shared_conn()
+    # ---TRANSFER FAMILY LOGIN FAILURES (from the CloudWatch Logs subscription filter)---
+    if "awslogs" in event:
+        try:
+            return handle_transfer_login_failures(event)
+        finally:
+            close_shared_conn()
+    invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
         logger.info("No records found in event.")
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="ServiceAvailability",
+            value=1,
+            dimensions=[{"Name": "FunctionName", "Value": FUNCTION_NAME}]
+        )
         return {"statusCode": 200, "body": "No records to process."}
     results = []
     had_failure = False
@@ -1265,14 +1756,26 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
-
-            route_critical_failure_notification(e, record)
-
+            route_critical_failure_notification(e, context)
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
+    update_partner_dropdown()
+    close_shared_conn()
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="Latency",
+        value=(datetime.now(timezone.utc) - invocation_start).total_seconds(),
+        unit="Seconds"
+    )
+    put_metric(
+        namespace="HIE/OperationalMonitoring",
+        metric_name="ServiceAvailability",
+        value=0 if retry_handler_failed else 1,
+        dimensions=[{"Name": "FunctionName", "Value": FUNCTION_NAME}]
+    )
     if retry_handler_failed:
         return {
             "statusCode": 500,
