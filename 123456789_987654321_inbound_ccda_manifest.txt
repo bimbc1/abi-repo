@@ -1,2 +1,5 @@
 123456789_987654321_PatientReceivedReport	- number of rows/files:	15	sha256 Checksum:	6a6f668dfed1afe90f610b4ceea41849c92510a23944ff8e228c299958edd18d
 123456789_987654321_PatientReceivedCCDA	- number of rows/files:	20	sha256 Checksum:	cae175409bd3c2435118a8d1c55151f8a84206734fd243cedf4877d66e98d5b8
+
+
+ixed. Previously, if the dropdown update failed because the database was down, the error was only written to the logs as a warning, so no retry happened and no alert email was sent. I updated update_partner_dropdown() so it now receives the Lambda event and context. If it fails with a DatabaseConnectionError, it calls invoke_retry_handler and route_critical_failure_notification, the same way the per-record loop handles failures, so the team gets a retry and an alert email. The alert call is wrapped in a try/except so a problem sending the email cannot crash the Lambda. Any other error in the dropdown update, such as a dashboard read or save error, is still only logged as a warning, because the dropdown is a side task and should never stop or slow down file processing.
