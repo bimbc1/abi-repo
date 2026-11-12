@@ -1,115 +1,254 @@
 ---
-AWSTemplateFormatVersion: "2010-09-09"
-Description: Template for SNS Ingestion failure topic creation and subscription.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: IAM Roles Stack
 
 Parameters:
   Env:
     Type: String
     AllowedValues:
-      - dev
-      - stg
-      - prod
-
-  EmailAddress1:
-    Type: String
-    MinLength: 1
-    Description: First email address to receive ingestion failure alerts.
-
-  EmailAddress2:
-    Type: String
-    Default: ""
-    Description: Second email address to receive ingestion failure alerts.
-
-  EmailAddress3:
-    Type: String
-    Default: ""
-    Description: Third email address to receive ingestion failure alerts.
-
-Conditions:
-  HasEmailAddress2: !Not [!Equals [!Ref EmailAddress2, ""]]
-  HasEmailAddress3: !Not [!Equals [!Ref EmailAddress3, ""]]
+    - dev
+    - stg
+    - prod
 
 Resources:
-  IngestionFailureSNSKey:
-    Type: AWS::KMS::Key
+  IAMRolehieTransferFamilyUploadOnly:
+    Type: AWS::IAM::Role
     Properties:
-      Description: !Sub KMS key for the ingestion failure alerts SNS topic ${Env}
-      EnableKeyRotation: true
-      KeyPolicy:
-        Version: "2012-10-17"
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      RoleName: !Sub project-hie-analytics-transfer-family-upload-only-role-${Env}
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
         Statement:
-          - Sid: AllowAccountAdministration
-            Effect: Allow
+          - Effect: Allow
             Principal:
-              AWS: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:root
-            Action: kms:*
-            Resource: "*"
-          - Sid: AllowCloudWatchAlarmsToPublish
-            Effect: Allow
+              Service: transfer.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: !Sub project-hie-analytics-upload-s3-policy-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: s3:ListBucket
+                Resource: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-documents-${Env}
+              - Effect: Allow
+                Action: s3:PutObject
+                Resource: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-documents-${Env}/*
+  
+  IAMRolehieTransferfamilys3uploadrole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+
+      RoleName: !Sub project-hie-analytics-transfer-family-s3-upload-role-${Env}
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
             Principal:
-              Service: cloudwatch.amazonaws.com
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey*
-            Resource: "*"
-          - Sid: AllowLambdaRolePublishThroughSNS
-            Effect: Allow
+              Service: transfer.amazonaws.com
+            Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: !Sub project-hie-analytics-transfer-family-s3-upload-policy-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowBucketAccess
+                Effect: Allow
+                Action:
+                  - s3:GetBucketLocation
+                  - s3:ListBucket
+                  - s3:ListBucketMultipartUploads
+                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-oraclehealth-documents-${Env}
+
+              - Sid: AllowObjectUploadAccess
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:PutObjectAcl
+                  - s3:GetObject
+                  - s3:DeleteObject
+                  - s3:AbortMultipartUpload
+                  - s3:ListMultipartUploadParts
+                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-oraclehealth-documents-${Env}/*
+  
+  IAMRolehieLambdaFullAccess:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub project-hie-analytics-lambda-full-access-role-${Env}
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+
+      ManagedPolicyArns:
+        - arn:aws-us-gov:iam::aws:policy/CloudWatchFullAccess
+        - arn:aws-us-gov:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws-us-gov:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws-us-gov:iam::aws:policy/SecretsManagerReadWrite
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
             Principal:
-              AWS: "*"
-            Action:
-              - kms:Decrypt
-              - kms:GenerateDataKey*
-            Resource: "*"
-            Condition:
-              StringEquals:
-                kms:CallerAccount: !Ref AWS::AccountId
-                kms:ViaService: !Sub sns.${AWS::Region}.amazonaws.com
-              ArnEquals:
-                aws:PrincipalArn: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/project/project-hie-analytics-lambda-full-access-role-${Env}
-  IngestionFailureSNSTopic:
-    Type: AWS::SNS::Topic
-    Properties:
-      TopicName: !Sub project-hie-analytics-ingestion-failure-alerts-${Env}
-      DisplayName: !Sub Ingestion Failure Alerts ${Env}
-      KmsMasterKeyId: !Ref IngestionFailureSNSKey
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+            
+      Policies:
+        - PolicyName: !Sub project-hie-analytics-lambda-dlq-policy-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                  - sqs:GetQueueAttributes
+                Resource: !ImportValue
+                  Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
 
-  IngestionFailureEmailSubscription1:
-    Type: AWS::SNS::Subscription
-    Properties:
-      TopicArn: !Ref IngestionFailureSNSTopic
-      Protocol: email
-      Endpoint: !Ref EmailAddress1
+        - PolicyName: !Sub project-hie-analytics-lambda-sns-publish-policy-${Env}
+          PolicyDocument: 
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: 
+                  - Fn::ImportValue:
+                      Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+                  - Fn::ImportValue:
+                      Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
 
-  IngestionFailureEmailSubscription2:
-    Type: AWS::SNS::Subscription
-    Condition: HasEmailAddress2
-    Properties:
-      TopicArn: !Ref IngestionFailureSNSTopic
-      Protocol: email
-      Endpoint: !Ref EmailAddress2
+        - PolicyName: !Sub project-hie-analytics-lambda-sns-kms-policy-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Sid: AllowUseOfSnsTopicKmsKey
+                Effect: Allow
+                Action:
+                  - kms:GenerateDataKey
+                  - kms:Decrypt
+                Resource:
+                  Fn::ImportValue:
+                    Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-key-arn-${Env}
+                      
 
-  IngestionFailureEmailSubscription3:
-    Type: AWS::SNS::Subscription
-    Condition: HasEmailAddress3
+        - PolicyName: !Sub project-hie-analytics-lambda-invoke-notification-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - lambda:InvokeFunction
+                Resource: !Sub arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:project-hie-analytics-process-notification-${Env}
+
+                
+  IAMRolehieInsertionLambdaFullAccess:
+    Type: AWS::IAM::Role
     Properties:
-      TopicArn: !Ref IngestionFailureSNSTopic
-      Protocol: email
-      Endpoint: !Ref EmailAddress3
+      RoleName: !Sub project-hie-analytics-insertion-lambda-full-access-role-${Env}
+      Tags:
+        - Key: tenant:CKID
+          Value: '2598'
+        - Key: tenant:VAECID
+          Value: AWG20251201001
+        - Key: va_vasi_id
+          Value: '2238'
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+
+      ManagedPolicyArns:
+        - arn:aws-us-gov:iam::aws:policy/CloudWatchFullAccess
+        - arn:aws-us-gov:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws-us-gov:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - arn:aws-us-gov:iam::aws:policy/SecretsManagerReadWrite
+
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+
+      Policies:
+        - PolicyName: !Sub project-hie-analytics-insertion-lambda-dlq-policy-${Env}
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !ImportValue
+                  Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
+
+  IAMRolehieEC2SSMSessionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+      RoleName: !Sub project-hie-analytics-ec2-ssm-role-${Env}
+      Path: /project/
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+      ManagedPolicyArns:
+        - arn:aws-us-gov:iam::aws:policy/AmazonSSMManagedInstanceCore
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
 
 Outputs:
-  IngestionFailureSNSTopicArn:
-    Description: "ARN of the SNS topic for ingestion failure alerts"
-    Value: !Ref IngestionFailureSNSTopic
+  LambdaRoleArn:
+    Value: !GetAtt IAMRolehieLambdaFullAccess.Arn
     Export:
-      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+      Name: !Sub project-hie-analytics-lambda-full-access-role-arn-${Env}
 
-  IngestionFailureSNSTopicName:
-    Description: "Name of the SNS topic for ingestion failure alerts"
-    Value: !GetAtt IngestionFailureSNSTopic.TopicName
+  LambdaInsertionRoleArn:
+    Value: !GetAtt IAMRolehieInsertionLambdaFullAccess.Arn
     Export:
-      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-topic-name-${Env}
+      Name: !Sub project-hie-analytics-lambda-insertion-role-arn-${Env}
 
-  IngestionFailureSNSKeyArn:
-    Value: !GetAtt IngestionFailureSNSKey.Arn
+  EC2SSMRoleArn:
+    Value: !GetAtt IAMRolehieEC2SSMSessionRole.Arn
     Export:
-      Name: !Sub project-hie-analytics-ingestion-failure-alerts-sns-key-arn-${Env}
+      Name: !Sub project-hie-analytics-ec2-ssm-role-arn-${Env}
+
+  TransferFamilyUploadOnlyRoleArn:
+    Value: !GetAtt IAMRolehieTransferFamilyUploadOnly.Arn
+    Export:
+      Name: !Sub project-hie-analytics-transfer-family-upload-only-role-arn-${Env}
+
+  TransferFamilyRoleArn:
+    Value: !GetAtt IAMRolehieTransferfamilys3uploadrole.Arn
+    Export:
+      Name: !Sub project-hie-analytics-transfer-family-s3-upload-role-arn-${Env}
