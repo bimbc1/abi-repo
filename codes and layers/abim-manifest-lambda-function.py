@@ -576,7 +576,7 @@ def get_registered_partner_count():
             conn.close()
     return _registered_partner_count["value"]
     # ---KEEP THE DASHBOARD PARTNER DROPDOWN IN SYNC WITH THE DATABASE (checked at most every 15 min)---
-def update_partner_dropdown():
+def update_partner_dropdown(event=None, context=None):
     if not DASHBOARD_NAME:
         return
     now = datetime.now(timezone.utc)
@@ -614,6 +614,13 @@ def update_partner_dropdown():
             cloudwatch.put_dashboard(DashboardName=DASHBOARD_NAME, DashboardBody=json.dumps(body))
             logger.info("Partner dropdown updated with %d partner(s).", len(partners))
         _dropdown_checked["at"] = now
+    except DatabaseConnectionError as e:
+        logger.warning("Could not update partner dropdown: %s", e)
+        invoke_retry_handler(e, event)
+        try:
+            route_critical_failure_notification(e, context)
+        except Exception as alert_error:
+            logger.error("Failed to send failure alert: %s", alert_error)
     except Exception as e:
         logger.warning("Could not update partner dropdown: %s", e)
     finally:
@@ -1455,7 +1462,7 @@ def lambda_handler(event, context):
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
-    update_partner_dropdown()
+    update_partner_dropdown(event, context)
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="Latency",
