@@ -3,10 +3,7 @@ import json
 import io
 import re
 import zipfile
-import gzip
-import base64
 import logging
-import time
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 import boto3
@@ -25,7 +22,7 @@ except ImportError as e:
                 "Fallback handle_retry invoked -- retry_utils layer not "
                 "available. Error: %s | Event: %s", error, event
             )
-            raise RuntimeError("retry_utils layer not available; no retry was performed.")
+            return False
     retry_utils = _RetryUtilsFallback()
     # --SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
 logger = logging.getLogger()
@@ -65,7 +62,6 @@ s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-logs = boto3.client("logs", region_name=AWS_REGION)
     # ---CREATING RETRY HANDLER FUNCTION---
 def invoke_retry_handler(error, event):
     if isinstance(error, DatabaseConnectionError):
@@ -75,7 +71,7 @@ def invoke_retry_handler(error, event):
         retry_metric_name = "SQSPublishRetries"
         failure_type = "SQSPublishFailure"
     else:
-        retry_metric_name = "OtherRetries"
+        retry_metric_name = "SNSRetries"
         failure_type = "OtherFailure"
         # ---PUTTING METRIC FOR RETRY---
     put_metric(
@@ -304,6 +300,12 @@ def reset_crud_tracking():
     global _last_crud_operation
     _last_crud_operation = None
     # --- OPERATIONAL ALERT COOLDOWN AND SNS ALERTING ---
+    # NOTE: The alert cooldown (_last_alert_times) is kept in memory inside each
+    # Lambda container. It is not shared between containers and is lost on a cold
+    # start. So if the Lambda runs in more than one container at the same time, or
+    # a new container starts, the same failure can send more than one alert email
+    # within the cooldown window. This is accepted: it only causes an occasional
+    # duplicate email and never stops a first alert from being sent.
 def _should_publish_alert(failure_category):
     """Determine whether an alert may be published for the category."""
     now = datetime.now(timezone.utc)
@@ -369,11 +371,6 @@ def _publish_operational_alert(subject, message, failure_category):
             failure_category,
             exc_info=True,
         )
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="SNSPublishFailures",
-            value=1
-        )
         return False
 def notify_database_connection_failure(failure_category, error_message, context=None):
     request_id = (
@@ -387,7 +384,7 @@ def notify_database_connection_failure(failure_category, error_message, context=
                 failure_type=failure_category,
                 error=str(error_message),
             )
-        except (KeyError, IndexError, ValueError):
+        except (KeyError, IndexError):
             logger.warning(
                 "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
                 "placeholder in the template); falling back to the built-in "
@@ -426,7 +423,7 @@ def notify_sqs_publish_failure(error, context=None):
                 failure_type="SQS Publish Failure",
                 error=str(error),
             )
-        except (KeyError, IndexError, ValueError):
+        except (KeyError, IndexError):
             logger.warning(
                 "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
                 "placeholder in the template); falling back to the built-in "
@@ -489,43 +486,6 @@ def get_conn(publish_failure_metric=True):
         raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
         ) from error
-    # ---ONE SHARED DATABASE CONNECTION PER INVOCATION (one per file arrival)---
-    # The secret is read from Secrets Manager once, when this connection is opened,
-    # and the connection is closed at the end of every invocation. The next file
-    # arrival opens a new connection with a fresh read of the secret, so a rotated
-    # password is always picked up. If the connection fails, it is not retried
-    # again in the same invocation.
-_shared_conn = {"conn": None, "failed": False}
-def get_shared_conn():
-    if _shared_conn["failed"]:
-        raise DatabaseConnectionError(
-            "Manifest processing failed due to database connection error."
-        )
-    conn = _shared_conn["conn"]
-    if conn is None:
-        try:
-            conn = get_conn()
-        except DatabaseConnectionError:
-            _shared_conn["failed"] = True
-            raise
-        _shared_conn["conn"] = conn
-    return conn
-def rollback_shared_conn():
-    conn = _shared_conn["conn"]
-    if conn is not None:
-        try:
-            conn.rollback()
-        except Exception as e:
-            logger.warning("Could not roll back shared database connection: %s", e)
-def close_shared_conn():
-    conn = _shared_conn["conn"]
-    _shared_conn["conn"] = None
-    _shared_conn["failed"] = False
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception as e:
-            logger.warning("Could not close shared database connection: %s", e)
     # ---SQS MESSAGE HELPERS---
 def publish_metadata_message(message_body, message_attributes=None):
     try:
@@ -579,205 +539,21 @@ _bucket_partner_ids = {}
 def get_partner_name_for_bucket(bucket):
     if bucket in _bucket_partner_names:
         return _bucket_partner_names[bucket]
+    conn = None
     try:
-        conn = get_shared_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             partner_id, _, _ = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
         _bucket_partner_names[bucket] = partner_name
         _bucket_partner_ids[bucket] = partner_id
         return partner_name
-    except DatabaseConnectionError:
-        raise
     except Exception as e:
-        rollback_shared_conn()
         logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
         return None
-    # ---TRANSFER FAMILY USER FOR AN ARRIVED FILE (read from the Transfer Family log group)---
-    # S3 gives us the bucket and file. The Transfer Family upload log line for that same
-    # file ("CLOSE" with path /<bucket>/<key>) is in a log stream named "<user>.<session-id>",
-    # so the user name comes from the stream name. The log line can arrive a few seconds
-    # after the S3 event, so the search is retried briefly.
-TRANSFER_LOG_GROUP_PREFIX = "/aws/transfer/"
-TRANSFER_LOG_LOOKBACK_SECONDS = 900
-TRANSFER_LOG_ATTEMPTS = 3
-TRANSFER_LOG_WAIT_SECONDS = 2
-_transfer_log_groups = []
-def get_transfer_log_groups():
-    if not _transfer_log_groups:
-        for page in logs.get_paginator("describe_log_groups").paginate(logGroupNamePrefix=TRANSFER_LOG_GROUP_PREFIX):
-            _transfer_log_groups.extend(g["logGroupName"] for g in page.get("logGroups", []))
-    return _transfer_log_groups
-def transfer_user_from_stream(stream_name):
-    match = re.match(r"^(?:.*/)?(.+?)(?:\.[0-9a-fA-F]{16,})?$", stream_name or "")
-    return match.group(1) if match else None
-def is_completed_upload(message, path):
-    # Works for both Transfer Family log formats:
-    #   JSON: {"activity-type":"CLOSE","path":"/<bucket>/<key>",...}
-    #   text: <user>.<session-id> CLOSE Path=/<bucket>/<key> BytesIn=...
-    text = (message or "").strip()
-    try:
-        record = json.loads(text)
-    except ValueError:
-        record = None
-    if isinstance(record, dict):
-        activity = record.get("activity-type") or record.get("activity")
-        return activity == "CLOSE" and (record.get("path") or record.get("Path")) == path
-    exact_path = r"(?:^|[\s=])" + re.escape(path) + r"(?:\s|$)"
-    return "CLOSE" in text.split()[:3] and re.search(exact_path, text) is not None
-def find_transfer_family_user(bucket, key):
-    path = f"/{bucket}/{key}"
-    pattern = '"%s"' % path.replace('"', '\\"')
-    start_ms = int((datetime.now(timezone.utc).timestamp() - TRANSFER_LOG_LOOKBACK_SECONDS) * 1000)
-    for attempt in range(TRANSFER_LOG_ATTEMPTS):
-        for group in get_transfer_log_groups():
-            kwargs = {"logGroupName": group, "startTime": start_ms, "filterPattern": pattern}
-            for _ in range(10):
-                resp = logs.filter_log_events(**kwargs)
-                for event in resp.get("events", []):
-                    if not is_completed_upload(event.get("message"), path):
-                        continue
-                    stream_user = (event.get("logStreamName") or "").strip()
-                    if not stream_user:
-                        stream_user = ((event.get("message") or "").split() or [""])[0]
-                    user = transfer_user_from_stream(stream_user)
-                    if user:
-                        return user
-                if not resp.get("nextToken"):
-                    break
-                kwargs["nextToken"] = resp["nextToken"]
-        if attempt < TRANSFER_LOG_ATTEMPTS - 1:
-            time.sleep(TRANSFER_LOG_WAIT_SECONDS)
-    return None
-def publish_transfer_family_file_in(bucket, key, partner_id):
-    try:
-        user = find_transfer_family_user(bucket, key)
-    except Exception as e:
-        logger.warning("Could not search the Transfer Family log group for s3://%s/%s: %s", bucket, key, e)
-        user = None
-    if user is None:
-        logger.warning(
-            "Transfer Family user not found for s3://%s/%s (not uploaded through Transfer Family, "
-            "or its log line is delayed).", bucket, key
-        )
-        put_partner_metric("HIE/OperationalMonitoring", "TransferFamilyUserNotFound", partner_id, 1)
-        return None
-    logger.info(
-        "Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s | file=%s",
-        user, _bucket_partner_names.get(bucket), partner_id, bucket, key
-    )
-    put_partner_metric(
-        "HIE/OperationalMonitoring", "PartnerTransferFilesIn", partner_id, 1,
-        extra_dimensions=[{"Name": "TransferUser", "Value": user}]
-    )
-    return user
-    # ---TRANSFER FAMILY LOGIN FAILURES PER PARTNER (Lambda invoked by a CloudWatch Logs
-    # subscription filter on AUTH_FAILURE lines of the Transfer Family log group)---
-    # A failed login has only the user name. The user's bucket comes from that user's last
-    # successful login (CONNECTED line, home-dir / HomeDir), and the bucket gives the partner.
-    # Works for both log formats:
-    #   JSON: {"activity-type":"AUTH_FAILURE","user":"Oracle",...}
-    #         {"activity-type":"CONNECTED","user":"Oracle","home-dir":"/<bucket>",...}
-    #   text: ERRORS AUTH_FAILURE Method=publickey User=Oracle ...
-    #         Oracle.<session-id> CONNECTED SourceIP=... User=Oracle HomeDir=/<bucket> ...
-TRANSFER_HOME_LOOKBACK_SECONDS = 30 * 24 * 3600
-_transfer_user_buckets = {}
-def parse_transfer_log_line(message):
-    text = (message or "").strip()
-    try:
-        record = json.loads(text)
-    except ValueError:
-        record = None
-    if isinstance(record, dict):
-        # JSON logs use activity-type/user/home-dir; this log group's transformer
-        # produces activity/User/HomeDir.
-        return (
-            record.get("activity-type") or record.get("activity"),
-            record.get("user") or record.get("User"),
-            record.get("home-dir") or record.get("HomeDir"),
-        )
-    words = text.split()
-    activity = next((w for w in words[:3] if w in ("AUTH_FAILURE", "CONNECTED")), None)
-    user = re.search(r"(?:^|\s)User=(\S+)", text)
-    home = re.search(r"(?:^|\s)HomeDir=(\S+)", text)
-    return activity, user.group(1).strip('"') if user else None, home.group(1).strip('"') if home else None
-TRANSFER_HOME_SEARCH_WINDOWS = (3600, 24 * 3600, TRANSFER_HOME_LOOKBACK_SECONDS)
-TRANSFER_HOME_SEARCH_MAX_SECONDS = 20
-def find_transfer_user_bucket(log_group, user):
-    if user in _transfer_user_buckets:
-        return _transfer_user_buckets[user]
-    pattern = '"CONNECTED" "%s"' % user.replace('"', '\\"')
-    deadline = time.time() + TRANSFER_HOME_SEARCH_MAX_SECONDS
-    now_s = datetime.now(timezone.utc).timestamp()
-    # Newest logins first: last hour, then last day, then the full lookback.
-    for window in TRANSFER_HOME_SEARCH_WINDOWS:
-        kwargs = {
-            "logGroupName": log_group,
-            "startTime": int((now_s - window) * 1000),
-            "filterPattern": pattern,
-        }
-        bucket = None
-        while time.time() < deadline:
-            resp = logs.filter_log_events(**kwargs)
-            for event in resp.get("events", []):
-                activity, line_user, home_dir = parse_transfer_log_line(event.get("message"))
-                if activity == "CONNECTED" and line_user == user and home_dir:
-                    parts = [x for x in home_dir.split("/") if x]
-                    if parts:
-                        bucket = parts[0]
-            if not resp.get("nextToken"):
-                break
-            kwargs["nextToken"] = resp["nextToken"]
-        if bucket:
-            _transfer_user_buckets[user] = bucket
-            return bucket
-        if time.time() >= deadline:
-            break
-    return None
-def handle_transfer_login_failures(event):
-    payload = json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
-    if payload.get("messageType") != "DATA_MESSAGE":
-        return {"statusCode": 200, "body": "Control message ignored."}
-    log_group = payload.get("logGroup")
-    counted = 0
-    for log_event in payload.get("logEvents", []):
-        activity, user, _ = parse_transfer_log_line(log_event.get("message"))
-        if activity != "AUTH_FAILURE":
-            continue
-        user = user or "Unknown"
-        partner_id = None
-        bucket = None
-        try:
-            if user != "Unknown":
-                bucket = find_transfer_user_bucket(log_group, user)
-            if bucket:
-                get_partner_name_for_bucket(bucket)
-                partner_id = _bucket_partner_ids.get(bucket)
-        except Exception as e:
-            rollback_shared_conn()
-            logger.warning("Could not find the partner for Transfer Family user %s: %s", user, e)
-        if partner_id is None:
-            if user == "Unknown":
-                reason = "no user name in the AUTH_FAILURE line"
-            elif not bucket:
-                reason = "no earlier successful login (CONNECTED with home folder) found in %s" % log_group
-            else:
-                reason = "bucket %s is not registered in partner_registry" % bucket
-            logger.warning(
-                "Login failure for Transfer Family user %s could not be matched to a partner: %s. "
-                "Counted under All only.", user, reason
-            )
-        else:
-            logger.info(
-                "Login failure | Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s",
-                user, _bucket_partner_names.get(bucket), partner_id, bucket
-            )
-        put_partner_metric(
-            "HIE/OperationalMonitoring", "PartnerLoginFailures", partner_id, 1,
-            extra_dimensions=[{"Name": "TransferUser", "Value": user}]
-        )
-        counted += 1
-    return {"statusCode": 200, "body": f"Login failures counted: {counted}"}
+    finally:
+        if conn:
+            conn.close()
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -785,18 +561,19 @@ def get_registered_partner_count():
     cached_at = _registered_partner_count["at"]
     if cached_at and (now - cached_at).total_seconds() < 900:
         return _registered_partner_count["value"]
+    conn = None
     try:
-        conn = get_shared_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             execute_crud(cur, "SELECT COUNT(*) FROM partner_registry")
             row = cur.fetchone()
         _registered_partner_count["value"] = row[0] if row else None
         _registered_partner_count["at"] = now
-    except DatabaseConnectionError:
-        raise
     except Exception as e:
-        rollback_shared_conn()
         logger.warning("Could not count registered partners: %s", e)
+    finally:
+        if conn:
+            conn.close()
     return _registered_partner_count["value"]
     # ---KEEP THE DASHBOARD PARTNER DROPDOWN IN SYNC WITH THE DATABASE (checked at most every 15 min)---
 def update_partner_dropdown():
@@ -806,8 +583,9 @@ def update_partner_dropdown():
     checked_at = _dropdown_checked["at"]
     if checked_at and (now - checked_at).total_seconds() < 900:
         return
+    conn = None
     try:
-        conn = get_shared_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             execute_crud(
                 cur,
@@ -837,8 +615,10 @@ def update_partner_dropdown():
             logger.info("Partner dropdown updated with %d partner(s).", len(partners))
         _dropdown_checked["at"] = now
     except Exception as e:
-        rollback_shared_conn()
         logger.warning("Could not update partner dropdown: %s", e)
+    finally:
+        if conn:
+            conn.close()
     # --- PARTNER TRANSMISSION STATE TRACKING ---
 def update_partner_state(cur, partner_id, object_key, partner_name=None):
     now = datetime.now(timezone.utc)
@@ -1007,11 +787,6 @@ def send_recovery_sns(partner_name, partner_id, environment):
         logger.exception(
             "SNS notification failed for partner_id=%s, but database changes were already committed.",
             partner_id,
-        )
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="SNSPublishFailures",
-            value=1
         )
     # ---FILE VALIDATION AND COUNTING---
 def read_manifest_expected_counts(bucket, key):
@@ -1264,7 +1039,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     not_in_breach_count = None
     reset_crud_tracking()
     try:
-        conn = get_shared_conn()
+        conn = get_conn()
         with conn.cursor() as cur:
             partner_id, partner_batch_key, environment = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
@@ -1287,7 +1062,6 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 row = cur.fetchone()
                 not_in_breach_count = row[0] if row else None
         except Exception as count_error:
-            rollback_shared_conn()
             logger.warning("Could not count partners not in breach: %s", count_error)
             if isinstance(count_error, psycopg2.Error):
                 put_failure_metric("CRUDFailureEvents", "Read", partner_id)
@@ -1319,7 +1093,26 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             bucket,
             batch_id
         )
+        if not isinstance(e, DatabaseConnectionError):
+            _publish_operational_alert(
+                subject=f"CRITICAL: Manifest processing failed for batch {batch_id}",
+                message=(
+                    f"CRITICAL: Manifest processing failed for batch '{batch_id}'.\n"
+                    f"Failure category: General Processing Failure\n"
+                    f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+                    f"AWS Region: {AWS_REGION}\n"
+                    f"Bucket: {bucket}\n"
+                    f"Partner: {partner_name or 'Unknown'}\n"
+                    f"CRUD operation: {crud_failure_type}\n"
+                    f"Error type: {type(e).__name__}\n"
+                    f"Error message: {str(e)}\n"
+                ),
+                failure_category="General Processing Failure",
+            )
         raise
+    finally:
+        if conn:
+            conn.close()
     if breach_cleared:
         send_recovery_sns(partner_name, partner_id, environment)
     put_partner_metric("HIE/PartnerMonitoring", "PartnerRecovered", partner_id, 1 if breach_cleared else 0)
@@ -1558,8 +1351,6 @@ def process_object(bucket, key, record):
     get_partner_name_for_bucket(bucket)
     arrival_partner_id = _bucket_partner_ids.get(bucket)
     put_partner_metric("HIE/OperationalMonitoring", "S3ObjectArrivals", arrival_partner_id, 1)
-    # ---TRANSFER FAMILY USER -> PARTNER, FILES IN PER PARTNER ID + "All"---
-    publish_transfer_family_file_in(bucket, key, arrival_partner_id)
     # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
     registered_partner_count = get_registered_partner_count()
     for _pid, _value in ((arrival_partner_id, 1), ("All", registered_partner_count)):
@@ -1607,13 +1398,6 @@ def process_object(bucket, key, record):
     # ---MAIN LAMBDA HANDLER---
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
-    close_shared_conn()
-    # ---TRANSFER FAMILY LOGIN FAILURES (from the CloudWatch Logs subscription filter)---
-    if "awslogs" in event:
-        try:
-            return handle_transfer_login_failures(event)
-        finally:
-            close_shared_conn()
     invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
@@ -1669,7 +1453,6 @@ def lambda_handler(event, context):
                 "error": error_message
             })
     update_partner_dropdown()
-    close_shared_conn()
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="Latency",
