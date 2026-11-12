@@ -1446,7 +1446,10 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
-            route_critical_failure_notification(e, context)
+            try:
+                route_critical_failure_notification(e, context)
+            except Exception as alert_error:
+                logger.error("Failed to send failure alert: %s", alert_error)
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
