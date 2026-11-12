@@ -22,7 +22,7 @@ except ImportError as e:
                 "Fallback handle_retry invoked -- retry_utils layer not "
                 "available. Error: %s | Event: %s", error, event
             )
-            return False
+            raise RuntimeError("retry_utils layer is not available; no retry was scheduled.")
     retry_utils = _RetryUtilsFallback()
     # --SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
 logger = logging.getLogger()
