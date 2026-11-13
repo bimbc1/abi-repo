@@ -183,6 +183,7 @@ def process_message(message):
     if message_type in ("MANIFEST_METADATA_INSERT", "MANIFEST_METADATA_UPSERT"):
 
         def run():
+            reset_failure_tracking()
             try:
                 upsert_manifest_metadata(message)
             except Exception as e:
@@ -205,6 +206,7 @@ def process_message(message):
     elif message_type == "PATIENT_REPORT_METADATA_UPSERT":
 
         def run():
+            reset_failure_tracking()
             try:
                 upsert_patient_report_metadata(message)
             except Exception as e:
@@ -268,6 +270,7 @@ def upsert_manifest_metadata(message):
         (partner_id, batch_id, file_name),
     )
     row = cur.fetchone()
+    track_crud(None)
 
     if row[0] > 0:
         logger.info("manifest_batch row already exists for batch_id=%s file_name=%s skipping",
@@ -287,6 +290,7 @@ def upsert_manifest_metadata(message):
              expected, actual, discrepancy, now, now, now,
              file_name, ingestion_method),
         )
+        track_crud(None)
         logger.info("Inserted manifest_batch row for batch_id=%s", batch_id)
 
     rows = message.get("patient_received_report", {}).get("rows", [])
@@ -314,6 +318,7 @@ def upsert_manifest_metadata(message):
                 (partner_id, batch_id, edipi_value, file_name),
             )
             row = cur.fetchone()
+            track_crud(None)
 
             if row[0] > 0:
                 skipped += 1
@@ -358,6 +363,7 @@ def upsert_manifest_metadata(message):
                      r.get("commonwell_indicator"),
                      r.get("ssn")),
                 )
+                track_crud(None)
                 inserted += 1
 
         logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
@@ -416,6 +422,7 @@ def upsert_patient_report_metadata(message):
             (partner_id, batch_id, edipi_value, file_name),
         )
         row = cur.fetchone()
+        track_crud(None)
 
         if row[0] > 0:
             skipped += 1
@@ -460,6 +467,7 @@ def upsert_patient_report_metadata(message):
                  r.get("commonwell_indicator"),
                  direction),         
             )
+            track_crud(None)
             inserted += 1
 
     conn.commit()
