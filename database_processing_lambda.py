@@ -611,7 +611,6 @@ def lambda_handler(event, context):
         logger.info("DB connection established")
     except Exception as e:
         logger.error("DB connection failed: %s", str(e))
-        put_metric("DBConnectionFailure")
         raise
 
     try:
