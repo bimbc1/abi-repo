@@ -132,11 +132,10 @@ def reset_failure_tracking():
 
 # ---- DB CONNECTION WITH RETRY ----
 def get_conn():
-    secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
-    creds  = json.loads(secret["SecretString"])
-
     def connect():
         try:
+            secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+            creds  = json.loads(secret["SecretString"])
             ssl_ctx = ssl.create_default_context(
                 cafile=os.path.join(os.path.dirname(__file__), "us-gov-west-1-bundle.pem")
             )
