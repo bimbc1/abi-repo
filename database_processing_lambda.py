@@ -121,7 +121,7 @@ def track_crud(operation):
 
 def classify_failure(e):
     global _last_failure_type
-    if isinstance(e, pg8000.dbapi.Error) and _last_crud_operation:
+    if _last_crud_operation and not isinstance(e, ValueError):
         _last_failure_type = _last_crud_operation
 
 
