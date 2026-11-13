@@ -190,7 +190,10 @@ def process_message(message):
                 put_metric("LambdaRetries") 
                 classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 raise
 
         result = retry_with_backoff(
@@ -213,7 +216,10 @@ def process_message(message):
                 put_metric("LambdaRetries")
                 classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 raise
 
         result = retry_with_backoff(
