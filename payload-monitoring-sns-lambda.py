@@ -186,6 +186,17 @@ def track_crud(operation):
     global _last_crud_operation
     _last_crud_operation = operation
 
+# ---- EXPECTED FILES PER PARTNER (Files In widget: Expected / Shortfall) ----
+EXPECTED_FILES_WINDOW_SECONDS = 1800  # dashboard counts expected files per 30 minutes
+
+
+def expected_files_per_window(files_per_transmission, interval_seconds):
+    """6 files every 1800s -> 6 per 30 min; 6 files every 3600s -> 3 per 30 min."""
+    if not files_per_transmission or not interval_seconds:
+        return None
+    return files_per_transmission * EXPECTED_FILES_WINDOW_SECONDS / interval_seconds
+
+
 def lambda_handler(event, context):
     conn = None
     cur = None
@@ -210,7 +221,8 @@ def lambda_handler(event, context):
                 ps.expected_interval_seconds,
                 ps.breach_flag,
                 ps.last_breach_email_sent_at,
-                pcd.partner_name
+                pcd.partner_name,
+                ps.expected_files_per_transmission
             FROM partner_schedule ps
             LEFT JOIN partner_contact_details pcd
                 ON ps.partner_id = pcd.partner_id
@@ -218,6 +230,9 @@ def lambda_handler(event, context):
 
         schedule_rows = cur.fetchall()
         logger.info("Found %s partner schedule rows", len(schedule_rows))
+
+        total_expected_files = 0
+        expected_counted = set()
 
         # =========================
         # Step 2: Loop through each partner
@@ -227,7 +242,8 @@ def lambda_handler(event, context):
             expected_interval_seconds,
             breach_flag,
             last_breach_email_sent_at,
-            partner_name
+            partner_name,
+            expected_files_per_transmission
         ) in schedule_rows:
 
             logger.info(
@@ -240,6 +256,22 @@ def lambda_handler(event, context):
                 partner_name = partner_id
 
             current_partner_name = partner_name
+
+            # ---- EXPECTED FILES PER 30 MIN FOR THIS PARTNER ----
+            # Sent before the "no transmission" checks below, so a partner that
+            # has stopped sending still has an Expected value (and shows a Shortfall).
+            expected_files = expected_files_per_window(
+                expected_files_per_transmission, expected_interval_seconds
+            )
+            if expected_files is not None and str(partner_id) not in expected_counted:
+                expected_counted.add(str(partner_id))
+                total_expected_files += expected_files
+                put_dashboard_metric(
+                    "PartnerExpectedFiles",
+                    expected_files,
+                    dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}],
+                    namespace="HIE/PartnerMonitoring",
+                )
 
             # =========================
             # Step 3: Get last payload timestamp
@@ -407,6 +439,14 @@ def lambda_handler(event, context):
                     )
 
                     publish_partner_metric(partner_name, "PartnerRecovered", 1)
+
+        # ---- EXPECTED FILES PER 30 MIN FOR "All" ----
+        put_dashboard_metric(
+            "PartnerExpectedFiles",
+            total_expected_files,
+            dimensions=[{"Name": "PartnerId", "Value": "All"}],
+            namespace="HIE/PartnerMonitoring",
+        )
 
         return {
             "statusCode": 200,
