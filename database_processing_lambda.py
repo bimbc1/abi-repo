@@ -6,21 +6,7 @@ import ssl
 import boto3
 import pg8000
 import time
-
-
-def retry_with_backoff(operation, max_attempts=3, retry_delay_seconds=1, return_bool=False):
-    last_error = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            result = operation()
-            return True if return_bool else result
-        except Exception as e:
-            last_error = e
-            if attempt < max_attempts:
-                time.sleep(retry_delay_seconds * (2 ** (attempt - 1)))
-    if return_bool:
-        return False
-    raise last_error
+from retry_utils import retry_with_backoff
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
