@@ -590,12 +590,13 @@ Resources:
                   "view": "singleValue",
                   "stat": "Sum",
                   "period": 1800,
+                  "setPeriodToTimeRange": true,
                   "liveData": true,
                   "sparkline": false,
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerTransferFilesIn\" PartnerId=\"__PARTNER__\"', 'Sum', 1800)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerTransferFilesIn\" PartnerId=\"__PARTNER__\"', 'Sum')",
                         "id": "tu",
                         "visible": false
                       }
@@ -609,28 +610,28 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "SUM([tfiles * 0, FILL(tu, 0) * 0 + 1])",
-                        "id": "tusers",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"PartnerExpectedFiles\" PartnerId=\"__PARTNER__\"', 'Maximum')",
+                        "id": "ex",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "IF(EPOCH(tfiles) < MAX(EPOCH(tfiles)), 6 * PERIOD(tfiles) / 1800 * MAX(MAX([tusers, tfiles * 0 + 1])))",
-                        "id": "texpected",
+                        "expression": "TIME_SERIES(1)",
+                        "id": "t",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "tfiles * 0 + MAX(RUNNING_SUM(tfiles))",
+                        "expression": "t * 0 + MAX(RUNNING_SUM(tfiles))",
                         "id": "totrecv",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "tfiles * 0 + MAX(RUNNING_SUM(texpected))",
+                        "expression": "t * MAX(SUM(ex)) * PERIOD(t) / 1800",
                         "id": "totexp",
                         "visible": false
                       }
@@ -653,7 +654,7 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "MAX([totexp - totrecv, tfiles * 0])",
+                        "expression": "MAX([totexp - totrecv, t * 0])",
                         "id": "ps",
                         "label": "Shortfall",
                         "color": "#d13212"
