@@ -376,7 +376,9 @@ def upsert_manifest_metadata(message):
     else:
         logger.info("No patient rows in message for batch_id=%s skipping patient_details", batch_id)
 
+    track_crud("Create")
     conn.commit()
+    track_crud(None)
     logger.info("Processed manifest_batch for batch_id=%s", batch_id)
 
 
@@ -475,7 +477,9 @@ def upsert_patient_report_metadata(message):
             track_crud(None)
             inserted += 1
 
+    track_crud("Create")
     conn.commit()
+    track_crud(None)
     logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
                 batch_id, inserted, skipped)
 
