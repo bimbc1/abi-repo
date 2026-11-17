@@ -137,6 +137,13 @@ def classify_batch_type(filename):
             return "DISCLOSURE"
         return None
     return None
+    # --- BATCH TYPE LABEL FOR LOGS (RECEIVED -> INBOUND_RECEIVED, DISCLOSURE -> OUTBOUND_DISCLOSURE) ---
+BATCH_TYPE_LOG_LABELS = {
+    "RECEIVED": "INBOUND_RECEIVED",
+    "DISCLOSURE": "OUTBOUND_DISCLOSURE",
+}
+def batch_type_label(batch_type):
+    return BATCH_TYPE_LOG_LABELS.get(batch_type, batch_type)
     # --- S3 BATCH FILE DISCOVERY ---
 def list_batch_keys(bucket, batch_id):
     keys = []
@@ -185,7 +192,7 @@ def find_available_keys(bucket, batch_id, batch_type):
             "Batch %s | type=%s | ignoring %d file(s) that belong to a "
             "different batch type or have no recognizable type marker: %s",
             batch_id,
-            batch_type,
+            batch_type_label(batch_type),
             len(ignored_files),
             ignored_files,
         )
@@ -234,7 +241,7 @@ def log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_k
         logger.info(
             "Batch %s | type=%s | Batch received with %d file(s): %s",
             batch_id,
-            batch_type,
+            batch_type_label(batch_type),
             len(batch_files),
             ", ".join(batch_files),
         )
@@ -1148,6 +1155,15 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
     zip_actual_count = count_zip(bucket, zip_meta["key"])
     zip_expected_count = manifest_expected_counts.get("CCDA", 0)
     zip_matches_manifest = zip_actual_count == zip_expected_count
+    # Negative = fewer files than the manifest says (e.g. manifest 10, actual 7 -> -3)
+    zip_count_discrepancy = zip_actual_count - zip_expected_count
+    logger.info(
+        "Batch %s | zip count check | manifest_expected=%d | actual=%d | count_discrepancy=%d",
+        batch_id,
+        zip_expected_count,
+        zip_actual_count,
+        zip_count_discrepancy,
+    )
     file_metadata = {
         "manifest": manifest_meta,
         "zip": zip_meta,
@@ -1179,7 +1195,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "manifest_expected_count": zip_expected_count,
             "zip_actual_count": zip_actual_count,
             "zip_matches_manifest": zip_matches_manifest,
-            "count_discrepancy": abs(zip_actual_count - zip_expected_count)
+            "count_discrepancy": zip_count_discrepancy
         },
         "status": {
             "validation_status": validation_status,
@@ -1204,6 +1220,15 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         patient_report_rows = extract_disclosure_report_rows(bucket, report_key)
     report_expected_count = manifest_expected_counts.get("REPORT", 0)
     report_matches_manifest = report_actual_count == report_expected_count
+    # Negative = fewer rows than the manifest says (e.g. manifest 10, actual 7 -> -3)
+    report_count_discrepancy = report_actual_count - report_expected_count
+    logger.info(
+        "Batch %s | report count check | manifest_expected=%d | actual=%d | count_discrepancy=%d",
+        batch_id,
+        report_expected_count,
+        report_actual_count,
+        report_count_discrepancy,
+    )
     file_metadata = {
         "report": report_meta,
     }
@@ -1234,7 +1259,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
             "manifest_expected_count": report_expected_count,
             "report_actual_count": report_actual_count,
             "report_matches_manifest": report_matches_manifest,
-            "count_discrepancy": abs(report_actual_count - report_expected_count)
+            "count_discrepancy": report_count_discrepancy
         },
         "status": {
             "validation_status": validation_status,
@@ -1384,7 +1409,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     logger.info(
         "Batch %s | type=%s | availability: manifest=%s report=%s zip=%s",
         batch_id,
-        batch_type,
+        batch_type_label(batch_type),
         bool(manifest_key),
         bool(report_key),
         bool(zip_key)
@@ -1400,12 +1425,12 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         logger.info(
             "Batch %s | type=%s is not ready yet. Missing files: %s",
             batch_id,
-            batch_type,
+            batch_type_label(batch_type),
             ", ".join(missing_files)
         )
         return None
     if is_batch_already_sent(bucket, manifest_key):
-        logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type)
+        logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type_label(batch_type))
         return None
     log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_key, report_key, zip_key)
     manifest_meta = get_object_metadata(bucket, manifest_key)
@@ -1415,7 +1440,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     logger.info(
         "Batch %s | type=%s | Manifest expected counts | CCDA=%d | REPORT=%d",
         batch_id,
-        batch_type,
+        batch_type_label(batch_type),
         manifest_expected_counts.get("CCDA", 0),
         manifest_expected_counts.get("REPORT", 0),
     )
