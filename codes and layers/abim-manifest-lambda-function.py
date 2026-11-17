@@ -3,7 +3,10 @@ import json
 import io
 import re
 import zipfile
+import gzip
+import base64
 import logging
+import time
 from datetime import datetime, timezone
 from urllib.parse import unquote_plus
 import boto3
@@ -62,6 +65,7 @@ s3 = boto3.client("s3")
 sqs = boto3.client("sqs", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+logs = boto3.client("logs", region_name=AWS_REGION)
     # ---CREATING RETRY HANDLER FUNCTION---
 def invoke_retry_handler(error, event):
     if isinstance(error, DatabaseConnectionError):
@@ -554,6 +558,165 @@ def get_partner_name_for_bucket(bucket):
     finally:
         if conn:
             conn.close()
+    # ---TRANSFER FAMILY USER FOR AN ARRIVED FILE (read from the Transfer Family log group)---
+    # S3 gives us the bucket and file. The Transfer Family upload log line for that same
+    # file ("CLOSE" with path /<bucket>/<key>) is in a log stream named "<user>.<session-id>",
+    # so the user name comes from the stream name. The log line can arrive a few seconds
+    # after the S3 event, so the search is retried briefly.
+TRANSFER_LOG_GROUP_PREFIX = "/aws/transfer/"
+TRANSFER_LOG_LOOKBACK_SECONDS = 900
+TRANSFER_LOG_ATTEMPTS = 3
+TRANSFER_LOG_WAIT_SECONDS = 2
+_transfer_log_groups = []
+def get_transfer_log_groups():
+    if not _transfer_log_groups:
+        for page in logs.get_paginator("describe_log_groups").paginate(logGroupNamePrefix=TRANSFER_LOG_GROUP_PREFIX):
+            _transfer_log_groups.extend(g["logGroupName"] for g in page.get("logGroups", []))
+    return _transfer_log_groups
+def transfer_user_from_stream(stream_name):
+    match = re.match(r"^(?:.*/)?(.+?)(?:\.[0-9a-fA-F]{16,})?$", stream_name or "")
+    return match.group(1) if match else None
+def find_transfer_family_user(bucket, key):
+    path = f"/{bucket}/{key}".replace('"', '\\"')
+    pattern = '{ ($.activity-type = "CLOSE") && ($.path = "%s") }' % path
+    start_ms = int((datetime.now(timezone.utc).timestamp() - TRANSFER_LOG_LOOKBACK_SECONDS) * 1000)
+    for attempt in range(TRANSFER_LOG_ATTEMPTS):
+        for group in get_transfer_log_groups():
+            kwargs = {"logGroupName": group, "startTime": start_ms, "filterPattern": pattern}
+            for _ in range(10):
+                resp = logs.filter_log_events(**kwargs)
+                for event in resp.get("events", []):
+                    user = transfer_user_from_stream(event.get("logStreamName"))
+                    if user:
+                        return user
+                if not resp.get("nextToken"):
+                    break
+                kwargs["nextToken"] = resp["nextToken"]
+        if attempt < TRANSFER_LOG_ATTEMPTS - 1:
+            time.sleep(TRANSFER_LOG_WAIT_SECONDS)
+    return None
+def publish_transfer_family_file_in(bucket, key, partner_id):
+    try:
+        user = find_transfer_family_user(bucket, key)
+    except Exception as e:
+        logger.warning("Could not search the Transfer Family log group for s3://%s/%s: %s", bucket, key, e)
+        user = None
+    if user is None:
+        logger.warning(
+            "Transfer Family user not found for s3://%s/%s (not uploaded through Transfer Family, "
+            "or its log line is delayed).", bucket, key
+        )
+        put_partner_metric("HIE/OperationalMonitoring", "TransferFamilyUserNotFound", partner_id, 1)
+        return None
+    logger.info(
+        "Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s | file=%s",
+        user, _bucket_partner_names.get(bucket), partner_id, bucket, key
+    )
+    put_partner_metric(
+        "HIE/OperationalMonitoring", "PartnerTransferFilesIn", partner_id, 1,
+        extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+    )
+    return user
+    # ---TRANSFER FAMILY LOGIN FAILURES PER PARTNER (Lambda invoked by a CloudWatch Logs
+    # subscription filter on AUTH_FAILURE lines of the Transfer Family log group)---
+    # A failed login has only the user name. The user's bucket comes from that user's last
+    # successful login (CONNECTED line, home-dir / HomeDir), and the bucket gives the partner.
+    # Works for both log formats:
+    #   JSON: {"activity-type":"AUTH_FAILURE","user":"Oracle",...}
+    #         {"activity-type":"CONNECTED","user":"Oracle","home-dir":"/<bucket>",...}
+    #   text: ERRORS AUTH_FAILURE Method=publickey User=Oracle ...
+    #         Oracle.<session-id> CONNECTED SourceIP=... User=Oracle HomeDir=/<bucket> ...
+TRANSFER_HOME_LOOKBACK_SECONDS = 30 * 24 * 3600
+_transfer_user_buckets = {}
+def parse_transfer_log_line(message):
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        return record.get("activity-type"), record.get("user"), record.get("home-dir")
+    words = text.split()
+    activity = next((w for w in words[:3] if w in ("AUTH_FAILURE", "CONNECTED")), None)
+    user = re.search(r"(?:^|\s)User=(\S+)", text)
+    home = re.search(r"(?:^|\s)HomeDir=(\S+)", text)
+    return activity, user.group(1).strip('"') if user else None, home.group(1).strip('"') if home else None
+TRANSFER_HOME_SEARCH_WINDOWS = (3600, 24 * 3600, TRANSFER_HOME_LOOKBACK_SECONDS)
+TRANSFER_HOME_SEARCH_MAX_SECONDS = 20
+def find_transfer_user_bucket(log_group, user):
+    if user in _transfer_user_buckets:
+        return _transfer_user_buckets[user]
+    pattern = '"CONNECTED" "%s"' % user.replace('"', '\\"')
+    deadline = time.time() + TRANSFER_HOME_SEARCH_MAX_SECONDS
+    now_s = datetime.now(timezone.utc).timestamp()
+    # Newest logins first: last hour, then last day, then the full lookback.
+    for window in TRANSFER_HOME_SEARCH_WINDOWS:
+        kwargs = {
+            "logGroupName": log_group,
+            "startTime": int((now_s - window) * 1000),
+            "filterPattern": pattern,
+        }
+        bucket = None
+        while time.time() < deadline:
+            resp = logs.filter_log_events(**kwargs)
+            for event in resp.get("events", []):
+                activity, line_user, home_dir = parse_transfer_log_line(event.get("message"))
+                if activity == "CONNECTED" and line_user == user and home_dir:
+                    parts = [x for x in home_dir.split("/") if x]
+                    if parts:
+                        bucket = parts[0]
+            if not resp.get("nextToken"):
+                break
+            kwargs["nextToken"] = resp["nextToken"]
+        if bucket:
+            _transfer_user_buckets[user] = bucket
+            return bucket
+        if time.time() >= deadline:
+            break
+    return None
+def handle_transfer_login_failures(event):
+    payload = json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
+    if payload.get("messageType") != "DATA_MESSAGE":
+        return {"statusCode": 200, "body": "Control message ignored."}
+    log_group = payload.get("logGroup")
+    counted = 0
+    for log_event in payload.get("logEvents", []):
+        activity, user, _ = parse_transfer_log_line(log_event.get("message"))
+        if activity != "AUTH_FAILURE":
+            continue
+        user = user or "Unknown"
+        partner_id = None
+        bucket = None
+        try:
+            if user != "Unknown":
+                bucket = find_transfer_user_bucket(log_group, user)
+            if bucket:
+                get_partner_name_for_bucket(bucket)
+                partner_id = _bucket_partner_ids.get(bucket)
+        except Exception as e:
+            logger.warning("Could not find the partner for Transfer Family user %s: %s", user, e)
+        if partner_id is None:
+            if user == "Unknown":
+                reason = "no user name in the AUTH_FAILURE line"
+            elif not bucket:
+                reason = "no earlier successful login (CONNECTED with home folder) found in %s" % log_group
+            else:
+                reason = "bucket %s is not registered in partner_registry" % bucket
+            logger.warning(
+                "Login failure for Transfer Family user %s could not be matched to a partner: %s. "
+                "Counted under All only.", user, reason
+            )
+        else:
+            logger.info(
+                "Login failure | Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s",
+                user, _bucket_partner_names.get(bucket), partner_id, bucket
+            )
+        put_partner_metric(
+            "HIE/OperationalMonitoring", "PartnerLoginFailures", partner_id, 1,
+            extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+        )
+        counted += 1
+    return {"statusCode": 200, "body": f"Login failures counted: {counted}"}
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -623,6 +786,60 @@ def update_partner_dropdown(event=None, context=None):
             logger.error("Failed to send failure alert: %s", alert_error)
     except Exception as e:
         logger.warning("Could not update partner dropdown: %s", e)
+    finally:
+        if conn:
+            conn.close()
+    # ---EXPECTED FILES PER PARTNER (dashboard Files In "Expected", read from partner_schedule)---
+    # Each partner's schedule (expected_files_per_transmission every expected_interval_seconds)
+    # is turned into "expected files per 30 minutes" and published per PartnerId and as "All".
+    # e.g. 6 files every 1800s -> 6, 6 files every 3600s -> 3. The dashboard multiplies this
+    # by the selected time range. Published at most every 5 minutes.
+EXPECTED_FILES_WINDOW_SECONDS = 1800
+_expected_files_published = {"at": None}
+def publish_partner_expected_files():
+    now = datetime.now(timezone.utc)
+    published_at = _expected_files_published["at"]
+    if published_at and (now - published_at).total_seconds() < 300:
+        return
+    conn = None
+    try:
+        conn = get_conn(publish_failure_metric=False)
+        with conn.cursor() as cur:
+            execute_crud(
+                cur,
+                """
+                SELECT DISTINCT ON (s.partner_id)
+                       s.partner_id,
+                       s.expected_files_per_transmission,
+                       s.expected_interval_seconds
+                FROM partner_schedule s
+                JOIN partner_registry r ON r.partner_id = s.partner_id
+                WHERE s.expected_interval_seconds > 0
+                  AND s.expected_files_per_transmission > 0
+                ORDER BY s.partner_id
+                """
+            )
+            rows = cur.fetchall()
+        total_expected = 0
+        for partner_id, files_per_transmission, interval_seconds in rows:
+            expected = files_per_transmission * EXPECTED_FILES_WINDOW_SECONDS / interval_seconds
+            total_expected += expected
+            put_metric(
+                namespace="HIE/PartnerMonitoring",
+                metric_name="PartnerExpectedFiles",
+                value=expected,
+                dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+            )
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerExpectedFiles",
+            value=total_expected,
+            dimensions=[{"Name": "PartnerId", "Value": "All"}]
+        )
+        _expected_files_published["at"] = now
+        logger.info("Published expected files per 30 min for %d partner(s), All=%s", len(rows), total_expected)
+    except Exception as e:
+        logger.warning("Could not publish expected files per partner: %s", e)
     finally:
         if conn:
             conn.close()
@@ -1358,6 +1575,8 @@ def process_object(bucket, key, record):
     get_partner_name_for_bucket(bucket)
     arrival_partner_id = _bucket_partner_ids.get(bucket)
     put_partner_metric("HIE/OperationalMonitoring", "S3ObjectArrivals", arrival_partner_id, 1)
+    # ---TRANSFER FAMILY USER -> PARTNER, FILES IN PER PARTNER ID + "All"---
+    publish_transfer_family_file_in(bucket, key, arrival_partner_id)
     # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
     registered_partner_count = get_registered_partner_count()
     for _pid, _value in ((arrival_partner_id, 1), ("All", registered_partner_count)):
@@ -1405,6 +1624,9 @@ def process_object(bucket, key, record):
     # ---MAIN LAMBDA HANDLER---
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
+    # ---TRANSFER FAMILY LOGIN FAILURES (from the CloudWatch Logs subscription filter)---
+    if "awslogs" in event:
+        return handle_transfer_login_failures(event)
     invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
@@ -1463,6 +1685,7 @@ def lambda_handler(event, context):
                 "error": error_message
             })
     update_partner_dropdown(event, context)
+    publish_partner_expected_files()
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="Latency",
