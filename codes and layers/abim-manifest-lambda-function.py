@@ -107,7 +107,6 @@ def extract_batch_id(filename):
         "outbound",
         "received",
         "disclosure",
-        "disclo",
     }
     for index, part in enumerate(parts):
         if part.lower() in markers:
@@ -134,7 +133,7 @@ def classify_batch_type(filename):
     if is_report_file(filename) or is_zip_file(filename):
         if "received" in lower:
             return "RECEIVED"
-        if "disclo" in lower:
+        if "disclosure" in lower:
             return "DISCLOSURE"
         return None
     return None
