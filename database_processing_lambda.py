@@ -241,10 +241,11 @@ def upsert_manifest_metadata(message):
 
     expected    = counts.get("manifest_expected_count", 0)
     actual      = counts.get("zip_actual_count", 0)
-    discrepancy = counts.get("count_discrepancy", abs((actual or 0) - (expected or 0)))
+    # Negative = fewer files than the manifest says (e.g. manifest 10, actual 7 -> -3)
+    discrepancy = counts.get("count_discrepancy", (actual or 0) - (expected or 0))
     now         = datetime.now(timezone.utc)
 
-    logger.info("batch_id=%s expected=%s actual=%s discrepancy=%s",
+    logger.info("batch_id=%s | manifest_expected=%s | actual=%s | count_discrepancy=%s",
                 batch_id, expected, actual, discrepancy)
 
     cur = conn.cursor()
