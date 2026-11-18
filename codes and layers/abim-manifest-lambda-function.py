@@ -850,22 +850,43 @@ def publish_partner_expected_files():
         if conn:
             conn.close()
     # --- PARTNER TRANSMISSION STATE TRACKING ---
-def update_partner_state(cur, partner_id, object_key, partner_name=None):
+def update_partner_state(cur, partner_id, object_key, payload_arrived_at, partner_name=None):
     now = datetime.now(timezone.utc)
+    # ---S3 ARRIVAL TIME (not Lambda run time) DRIVES last_seen_at AND THE SLA GAP---
+    if isinstance(payload_arrived_at, str):
+        arrived_at = datetime.fromisoformat(payload_arrived_at.replace("Z", "+00:00"))
+    else:
+        arrived_at = payload_arrived_at or now
+    if arrived_at.tzinfo is None:
+        arrived_at = arrived_at.replace(tzinfo=timezone.utc)
     filename = os.path.basename(object_key)
     batch_id = extract_batch_id(filename)
     batch_prefix = f"{batch_id}_"
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
+    # ---LOCK THE PARTNER ROW SO CONCURRENT LAMBDA RUNS CANNOT RACE---
     execute_crud(
         cur,
         """
         SELECT last_seen_at
         FROM partner_transmission_state
         WHERE partner_id = %s
+        FOR UPDATE
         """,
         (partner_id,),
     )
     existing_row = cur.fetchone()
+    previous_last_seen_at = None
+    if existing_row and existing_row[0]:
+        previous_last_seen_at = existing_row[0]
+        if previous_last_seen_at.tzinfo is None:
+            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
+        # ---STALE: DUPLICATE OR OUT-OF-ORDER FILE, DO NOT MOVE STATE BACKWARDS---
+        if arrived_at <= previous_last_seen_at:
+            logger.info(
+                "STALE | partner_id=%s | file=%s | arrived_at=%s <= last_seen_at=%s | state not updated",
+                partner_id, clean_filename, arrived_at.isoformat(), previous_last_seen_at.isoformat()
+            )
+            return "STALE"
     if existing_row:
         execute_crud(
             cur,
@@ -877,7 +898,7 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
                 updated_at = %s
             WHERE partner_id = %s
             """,
-            (now, batch_id, clean_filename, now, partner_id),
+            (arrived_at, batch_id, clean_filename, now, partner_id),
         )
     else:
         execute_crud(
@@ -892,7 +913,7 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
             )
             VALUES (%s,%s,%s,%s,%s)
             """,
-            (partner_id, now, batch_id, clean_filename, now),
+            (partner_id, arrived_at, batch_id, clean_filename, now),
         )
     put_metric(
         namespace="HIE/PartnerMonitoring",
@@ -901,11 +922,9 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
         unit="Count",
         dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
     )
-    if existing_row and existing_row[0]:
-        previous_last_seen_at = existing_row[0]
-        if previous_last_seen_at.tzinfo is None:
-            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
-        gap_seconds = (now - previous_last_seen_at).total_seconds()
+    # ---GAP / SLA CHECK USING S3 ARRIVAL TIMES---
+    if previous_last_seen_at:
+        gap_seconds = (arrived_at - previous_last_seen_at).total_seconds()
         execute_crud(
             cur,
             """
@@ -920,7 +939,8 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
         if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
             # ---STALE CONNECTION PER PARTNER ID + "All"---
             put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
-    # --- BREACH AND RECOVERY STATE MANAGEMENT ---
+    return "UPDATED"
+# --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id):
     execute_crud(
         cur,
@@ -1293,7 +1313,9 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             partner_name = get_partner_name(cur, partner_id)
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
-            update_partner_state(cur, partner_id, latest_meta["key"], partner_name)
+            update_partner_state(
+                cur, partner_id, latest_meta["key"], latest_meta["last_modified_utc"], partner_name
+            )
             breach_cleared = clear_breach_flag(cur, partner_id)
         conn.commit()
         # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
