@@ -922,25 +922,46 @@ def update_partner_state(cur, partner_id, object_key, payload_arrived_at, partne
         unit="Count",
         dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
     )
-    # ---GAP / SLA CHECK USING S3 ARRIVAL TIMES---
-    if previous_last_seen_at:
-        gap_seconds = (arrived_at - previous_last_seen_at).total_seconds()
-        execute_crud(
-            cur,
-            """
-            SELECT expected_interval_seconds
-            FROM partner_schedule
-            WHERE partner_id = %s
-            """,
-            (partner_id,),
+    # ---FIRST FILE FOR THIS PARTNER: NO EARLIER ARRIVAL, SO NO GAP TO CLASSIFY---
+    if previous_last_seen_at is None:
+        logger.info("Partner %s | first recorded arrival, no gap to classify", partner_id)
+        return "ON_TIME"
+    gap_seconds = (arrived_at - previous_last_seen_at).total_seconds()
+    # ---READ CONFIGURED SLA---
+    execute_crud(
+        cur,
+        """
+        SELECT expected_interval_seconds
+        FROM partner_schedule
+        WHERE partner_id = %s
+        """,
+        (partner_id,),
+    )
+    schedule_row = cur.fetchone()
+    expected_interval_seconds = schedule_row[0] if schedule_row else None
+    if expected_interval_seconds is None:
+        raise ValueError(f"No SLA (expected_interval_seconds) configured for partner_id={partner_id}")
+    try:
+        expected_interval_seconds = float(expected_interval_seconds)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Invalid SLA (expected_interval_seconds={expected_interval_seconds!r}) for partner_id={partner_id}"
         )
-        schedule_row = cur.fetchone()
-        expected_interval_seconds = schedule_row[0] if schedule_row else None
-        if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
-            # ---STALE CONNECTION PER PARTNER ID + "All"---
-            put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
-    return "UPDATED"
-# --- BREACH AND RECOVERY STATE MANAGEMENT ---
+    if expected_interval_seconds <= 0:
+        raise ValueError(
+            f"Invalid SLA (expected_interval_seconds={expected_interval_seconds}) for partner_id={partner_id}"
+        )
+    # ---GAP CLASSIFICATION---
+    gap_classification = "BREACH" if gap_seconds > expected_interval_seconds else "ON_TIME"
+    logger.info(
+        "Partner %s | gap=%.0fs | sla=%.0fs | %s",
+        partner_id, gap_seconds, expected_interval_seconds, gap_classification
+    )
+    if gap_seconds > expected_interval_seconds * 1.5:
+        # ---STALE CONNECTION PER PARTNER ID + "All"---
+        put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
+    return gap_classification
+    # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id):
     execute_crud(
         cur,
@@ -1313,9 +1334,10 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             partner_name = get_partner_name(cur, partner_id)
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
-            update_partner_state(
+            gap_classification = update_partner_state(
                 cur, partner_id, latest_meta["key"], latest_meta["last_modified_utc"], partner_name
             )
+            logger.info("Batch %s | partner_id=%s | gap classification=%s", batch_id, partner_id, gap_classification)
             breach_cleared = clear_breach_flag(cur, partner_id)
         conn.commit()
         # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
