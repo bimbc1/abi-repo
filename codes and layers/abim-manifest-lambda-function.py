@@ -1334,11 +1334,18 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             partner_name = get_partner_name(cur, partner_id)
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
-            gap_classification = update_partner_state(
+            on_time_transmission = update_partner_state(
                 cur, partner_id, latest_meta["key"], latest_meta["last_modified_utc"], partner_name
             )
-            logger.info("Batch %s | partner_id=%s | gap classification=%s", batch_id, partner_id, gap_classification)
-            breach_cleared = clear_breach_flag(cur, partner_id)
+            logger.info("Batch %s | partner_id=%s | gap classification=%s", batch_id, partner_id, on_time_transmission)
+            # ---ONLY CLEAR THE BREACH FLAG FOR A NEW ARRIVAL, NOT A DUPLICATE/OUT-OF-ORDER (STALE) FILE---
+            if on_time_transmission != "STALE":
+                breach_cleared = clear_breach_flag(cur, partner_id)
+            else:
+                logger.info(
+                    "Batch %s | partner_id=%s | STALE file, breach flag left unchanged",
+                    batch_id, partner_id
+                )
         conn.commit()
         # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
         try:
