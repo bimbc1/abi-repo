@@ -38,10 +38,10 @@ Resources:
             Statement:
               - Effect: Allow
                 Action: s3:ListBucket
-                Resource: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-documents-${Env}
+                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-*-documents-${Env}
               - Effect: Allow
                 Action: s3:PutObject
-                Resource: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-documents-${Env}/*
+                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-*-documents-${Env}/*
   
   IAMRolehieTransferfamilys3uploadrole:
     Type: AWS::IAM::Role
@@ -76,7 +76,7 @@ Resources:
                   - s3:GetBucketLocation
                   - s3:ListBucket
                   - s3:ListBucketMultipartUploads
-                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-oraclehealth-documents-${Env}
+                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-*-documents-${Env}
 
               - Sid: AllowObjectUploadAccess
                 Effect: Allow
@@ -87,7 +87,7 @@ Resources:
                   - s3:DeleteObject
                   - s3:AbortMultipartUpload
                   - s3:ListMultipartUploadParts
-                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-oraclehealth-documents-${Env}/*
+                Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-*-documents-${Env}/*
   
   IAMRolehieLambdaFullAccess:
     Type: AWS::IAM::Role
