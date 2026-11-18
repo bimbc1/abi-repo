@@ -1326,6 +1326,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     partner_id = partner_batch_key = environment = partner_name = None
     breach_cleared = False
     not_in_breach_count = None
+    on_time_transmission = None
     reset_crud_tracking()
     try:
         conn = get_conn()
@@ -1412,9 +1413,33 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     finally:
         if conn:
             conn.close()
+    # ---POST-COMMIT TRANSMISSION STATUS (skipped for STALE duplicate/out-of-order files)---
+    if on_time_transmission != "STALE":
+        logger.info(
+            "TransmissionStatus | partner_id=%s | partner_name=%s | batch_id=%s | status=%s",
+            partner_id, partner_name, batch_id, on_time_transmission
+        )
+        # ---ON-TIME / DELAYED TRANSMISSIONS PER PARTNER ID + "All"---
+        if on_time_transmission == "BREACH":
+            put_partner_metric("HIE/PartnerMonitoring", "DelayedTransmissions", partner_id, 1)
+        else:
+            put_partner_metric("HIE/PartnerMonitoring", "OnTimeTransmissions", partner_id, 1)
     if breach_cleared:
+        logger.info(
+            "PartnerRecovery | partner_id=%s | partner_name=%s | batch_id=%s | breach cleared, recovery notification sent",
+            partner_id, partner_name, batch_id
+        )
         send_recovery_sns(partner_name, partner_id, environment)
     put_partner_metric("HIE/PartnerMonitoring", "PartnerRecovered", partner_id, 1 if breach_cleared else 0)
+    # ---PARTNER RECOVERED PER PARTNER NAME---
+    if on_time_transmission != "STALE" and partner_name:
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerRecovered",
+            value=1 if breach_cleared else 0,
+            unit="Count",
+            dimensions=[{"Name": "PartnerName", "Value": str(partner_name)}]
+        )
     # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
     # Sent per PartnerId and as "All" (value = number of registered partners not in breach).
     all_not_in_breach = not_in_breach_count if not_in_breach_count is not None else 1
