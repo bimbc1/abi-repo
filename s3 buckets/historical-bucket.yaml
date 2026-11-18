@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: S3 Bucket with S3 ? Lambda trigger
+Description: S3 Bucket with S3 Lambda trigger
 
 Parameters:
   Env:
@@ -16,6 +16,7 @@ Resources:
         Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
       Action: lambda:InvokeFunction
       Principal: s3.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
       SourceArn: !Sub arn:aws-us-gov:s3:::project-hie-analytics-oraclehealth-historical-documents-${Env}
  
 
