@@ -125,9 +125,9 @@ def is_target_file(filename):
 def classify_batch_type(filename):
     lower = filename.lower()
     if is_manifest_file(filename):
-        if "inbound" in lower:
-            return "RECEIVED"
         if "outbound" in lower:
+            return "RECEIVED"
+        if "inbound" in lower:
             return "DISCLOSURE"
         return None
     if is_report_file(filename) or is_zip_file(filename):
@@ -137,10 +137,10 @@ def classify_batch_type(filename):
             return "DISCLOSURE"
         return None
     return None
-    # --- BATCH TYPE LABEL FOR LOGS (RECEIVED -> INBOUND_RECEIVED, DISCLOSURE -> OUTBOUND_DISCLOSURE) ---
+    # --- BATCH TYPE LABEL FOR LOGS (RECEIVED -> OUTBOUND_RECEIVED, DISCLOSURE -> INBOUND_DISCLOSURE) ---
 BATCH_TYPE_LOG_LABELS = {
-    "RECEIVED": "INBOUND_RECEIVED",
-    "DISCLOSURE": "OUTBOUND_DISCLOSURE",
+    "RECEIVED": "OUTBOUND_RECEIVED",
+    "DISCLOSURE": "INBOUND_DISCLOSURE",
 }
 def batch_type_label(batch_type):
     return BATCH_TYPE_LOG_LABELS.get(batch_type, batch_type)
@@ -571,8 +571,8 @@ def get_partner_name_for_bucket(bucket):
     # after the S3 event, so the search is retried briefly.
 TRANSFER_LOG_GROUP_PREFIX = "/aws/transfer/"
 TRANSFER_LOG_LOOKBACK_SECONDS = 900
-TRANSFER_LOG_ATTEMPTS = 3
-TRANSFER_LOG_WAIT_SECONDS = 2
+TRANSFER_LOG_ATTEMPTS = 6
+TRANSFER_LOG_WAIT_SECONDS = 10
 _transfer_log_groups = []
 def get_transfer_log_groups():
     if not _transfer_log_groups:
@@ -1293,7 +1293,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": INGESTION_METHOD,
-        "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
+        "direction": "outbound" if batch_type == "RECEIVED" else "inbound",
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
