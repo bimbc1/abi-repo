@@ -2,13 +2,11 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-from collections import defaultdict
-
+import ssl
 import boto3
 import pg8000
+import time
 from retry_utils import retry_with_backoff
-
-METRIC_NAMESPACE = os.environ["METRIC_NAMESPACE"]
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -23,6 +21,9 @@ AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
 cloudwatch = boto3.client("cloudwatch",     region_name=AWS_REGION)
+sqs        = boto3.client("sqs",            region_name=AWS_REGION)
+
+METADATA_PROCESSING_QUEUE_NAME = os.environ.get("METADATA_PROCESSING_QUEUE_NAME")
 
 # ---- GLOBAL CONNECTION ----
 conn = None
@@ -30,68 +31,97 @@ conn = None
 
 # ---- CLOUDWATCH METRIC ----
 def put_metric(metric_name, value=1, unit="Count"):
-    cloudwatch.put_metric_data(
-        Namespace=METRIC_NAMESPACE,
-        MetricData=[{
-            "MetricName": metric_name,
-            "Value": value,
-            "Unit": unit,
-            "Dimensions": [{
-                "Name": "FunctionName",
-                "Value": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown"),
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="HIE/OperationalMonitoring",
+            MetricData=[{
+                "MetricName": metric_name,
+                "Value": value,
+                "Unit": unit,
+                "Dimensions": [{
+                    "Name": "FunctionName",
+                    "Value": os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown"),
+                }],
             }],
-        }],
+        )
+    except Exception as e:
+        logger.warning("Failed to publish metric %s: %s", metric_name, str(e))
+
+
+# ---- PARTNER CLOUDWATCH METRIC ----
+def publish_partner_metric(partner_name, metric_name, value):
+    cloudwatch.put_metric_data(
+        Namespace="HIE/OperationalMonitoring",
+        MetricData=[
+            {
+                "MetricName": metric_name,
+                "Value": value,
+                "Unit": "Count",
+                "Dimensions": [
+                    {
+                        "Name": "PartnerName",
+                        "Value": partner_name
+                    }
+                ]
+            }
+        ]
     )
 
+# ---- DASHBOARD METRICS ----
+FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
 
-# ---- BATCHED PARTNER CLOUDWATCH METRICS ----
-def record_partner_metric(counts, partner_name, metric_name, value=1):
-    partner_name = partner_name or "Unknown"
 
-    counts[(partner_name, metric_name)] += value
+def put_dashboard_metric(metric_name, value=1, dimensions=None):
+    try:
+        metric = {"MetricName": metric_name, "Value": value, "Unit": "Count"}
+        if dimensions:
+            metric["Dimensions"] = dimensions
+        cloudwatch.put_metric_data(Namespace="HIE/OperationalMonitoring", MetricData=[metric])
+    except Exception as metric_error:
+        logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
 
-def flush_partner_metrics(counts):
-    if not counts:
-        return
 
-    metric_data = [
-        {
-            "MetricName": metric_name,
-            "Value": value,
-            "Unit": "Count",
-            "Dimensions": [
-                {"Name": "PartnerName", "Value": partner_name}
-            ],
-        }
-        for (partner_name, metric_name), value in counts.items()
+def put_crud_failure_metrics(failure_type, partner_id):
+    dimensions = [
+        {"Name": "FunctionName", "Value": FUNCTION_NAME},
+        {"Name": "FailureType", "Value": failure_type},
     ]
+    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
+    for pid in ([str(partner_id), "All"] if partner_id is not None else ["All"]):
+        put_dashboard_metric(
+            "CRUDFailureEvents",
+            dimensions=dimensions + [{"Name": "PartnerId", "Value": pid}],
+        )
+    logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s", failure_type, partner_id)
 
-    for offset in range(0, len(metric_data), 1000):
-        chunk = metric_data[offset:offset + 1000]
 
-        try:
-            cloudwatch.put_metric_data(
-                Namespace=METRIC_NAMESPACE,
-                MetricData=chunk,
-            )
-        except Exception:
-            logger.exception(
-                "Failed to publish partner metric batch of %d entries",
-                len(chunk),
-            )
-        else:
-            logger.info(
-                "Published partner metric batch of %d entries",
-                len(chunk),
-            )
+# ---- CRUD OPERATION TRACKING ----
+_last_crud_operation = None
+_last_failure_type = None
+
+
+def track_crud(operation):
+    global _last_crud_operation
+    _last_crud_operation = operation
+
+
+def classify_failure(e):
+    global _last_failure_type
+    if _last_crud_operation and not isinstance(e, ValueError):
+        _last_failure_type = _last_crud_operation
+
+
+def reset_failure_tracking():
+    global _last_crud_operation, _last_failure_type
+    _last_crud_operation = None
+    _last_failure_type = None
 
 # ---- DB CONNECTION WITH RETRY ----
 def get_conn():
-    secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
-    creds  = json.loads(secret["SecretString"])
-
     def connect():
         try:
+            secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+            creds  = json.loads(secret["SecretString"])
             return pg8000.connect(
                 host=DB_HOST,
                 port=DB_PORT,
@@ -102,6 +132,13 @@ def get_conn():
             )
         except Exception as e:
             put_metric("LambdaRetries")
+            put_dashboard_metric(
+                "RetryEvents",
+                dimensions=[
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+                ],
+            )
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
 
@@ -115,6 +152,7 @@ def get_conn():
     except Exception as e:
         put_metric("DBConnectionFailure")
         logger.error("DB connection failed after all retries: %s", str(e))
+        put_dashboard_metric("DatabaseConnectionFailures")
         raise Exception("Failed to connect to PostgreSQL after all retries")
 
 
@@ -126,12 +164,17 @@ def process_message(message):
     if message_type in ("MANIFEST_METADATA_INSERT", "MANIFEST_METADATA_UPSERT"):
 
         def run():
+            reset_failure_tracking()
             try:
                 upsert_manifest_metadata(message)
             except Exception as e:
-                put_metric("LambdaRetries")
+                put_metric("LambdaRetries") 
+                classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 raise
 
         result = retry_with_backoff(
@@ -147,12 +190,17 @@ def process_message(message):
     elif message_type == "PATIENT_REPORT_METADATA_UPSERT":
 
         def run():
+            reset_failure_tracking()
             try:
                 upsert_patient_report_metadata(message)
             except Exception as e:
                 put_metric("LambdaRetries")
+                classify_failure(e)
                 logger.warning("DB write attempt failed: %s", str(e))
-                conn.rollback()
+                try:
+                    conn.rollback()
+                except Exception:
+                    pass
                 raise
 
         result = retry_with_backoff(
@@ -189,15 +237,17 @@ def upsert_manifest_metadata(message):
 
     expected    = counts.get("manifest_expected_count", 0)
     actual      = counts.get("zip_actual_count", 0)
-    discrepancy = counts.get("count_discrepancy", abs((actual or 0) - (expected or 0)))
+    # Negative = fewer files than the manifest says (e.g. manifest 10, actual 7 -> -3)
+    discrepancy = counts.get("count_discrepancy", (actual or 0) - (expected or 0))
     now         = datetime.now(timezone.utc)
 
-    logger.info("batch_id=%s expected=%s actual=%s discrepancy=%s",
+    logger.info("batch_id=%s | manifest_expected=%s | actual=%s | count_discrepancy=%s",
                 batch_id, expected, actual, discrepancy)
 
     cur = conn.cursor()
 
     # ---- CHECK IF manifest_batch ROW EXISTS ----
+    track_crud("Read")
     cur.execute(
         """
         SELECT COUNT(*) FROM manifest_batch
@@ -208,11 +258,13 @@ def upsert_manifest_metadata(message):
         (partner_id, batch_id, file_name),
     )
     row = cur.fetchone()
+    track_crud(None)
 
     if row[0] > 0:
         logger.info("manifest_batch row already exists for batch_id=%s file_name=%s skipping",
                     batch_id, file_name)
     else:
+        track_crud("Create")
         cur.execute(
             """
             INSERT INTO manifest_batch (
@@ -226,6 +278,7 @@ def upsert_manifest_metadata(message):
              expected, actual, discrepancy, now, now, now,
              file_name, ingestion_method),
         )
+        track_crud(None)
         logger.info("Inserted manifest_batch row for batch_id=%s", batch_id)
 
     rows = message.get("patient_received_report", {}).get("rows", [])
@@ -241,6 +294,7 @@ def upsert_manifest_metadata(message):
                 continue
 
             # ---- CHECK IF patient_details ROW EXISTS ----
+            track_crud("Read")
             cur.execute(
                 """
                 SELECT COUNT(*) FROM patient_details
@@ -252,12 +306,14 @@ def upsert_manifest_metadata(message):
                 (partner_id, batch_id, edipi_value, file_name),
             )
             row = cur.fetchone()
+            track_crud(None)
 
             if row[0] > 0:
                 skipped += 1
                 logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                             partner_id, batch_id, edipi_value, file_name)
             else:
+                track_crud("Create")
                 cur.execute(
                     """
                     INSERT INTO patient_details (
@@ -295,6 +351,7 @@ def upsert_manifest_metadata(message):
                      r.get("commonwell_indicator"),
                      r.get("ssn")),
                 )
+                track_crud(None)
                 inserted += 1
 
         logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
@@ -302,7 +359,9 @@ def upsert_manifest_metadata(message):
     else:
         logger.info("No patient rows in message for batch_id=%s skipping patient_details", batch_id)
 
+    track_crud("Create")
     conn.commit()
+    track_crud(None)
     logger.info("Processed manifest_batch for batch_id=%s", batch_id)
 
 
@@ -341,6 +400,7 @@ def upsert_patient_report_metadata(message):
             continue
 
         # ---- CHECK IF patient_details ROW EXISTS ----
+        track_crud("Read")
         cur.execute(
             """
             SELECT COUNT(*) FROM patient_details
@@ -352,12 +412,14 @@ def upsert_patient_report_metadata(message):
             (partner_id, batch_id, edipi_value, file_name),
         )
         row = cur.fetchone()
+        track_crud(None)
 
         if row[0] > 0:
             skipped += 1
             logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                         partner_id, batch_id, edipi_value, file_name)
         else:
+            track_crud("Create")
             cur.execute(
                 """
                 INSERT INTO patient_details (
@@ -395,131 +457,174 @@ def upsert_patient_report_metadata(message):
                  r.get("commonwell_indicator"),
                  direction),         
             )
+            track_crud(None)
             inserted += 1
 
+    track_crud("Create")
     conn.commit()
+    track_crud(None)
     logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
                 batch_id, inserted, skipped)
 
 
-# ---- SAFE PARTNER NAME FOR CLOUDWATCH DIMENSIONS ----
-def get_partner_name(message):
-    if not isinstance(message, dict):
-        return "Unknown"
+# ---- PROCESS ONE MESSAGE (shared by SNS and SQS paths) ----
+def handle_one_message(message_id, raw_body):
+    """Returns True on success, False on failure. Never raises."""
+    message = None
+    reset_failure_tracking()
 
-    partner = message.get("partner")
-    if not isinstance(partner, dict):
-        return "Unknown"
+    try:
+        message = json.loads(raw_body)
+        logger.info("msg %s type=%s batch=%s rows=%s",
+                    message_id,
+                    message.get("message_type"),
+                    message.get("source", {}).get("batch_id"),
+                    message.get("patient_received_report", {}).get("row_count"))
 
-    partner_name = partner.get("partner_name")
-    if partner_name is None:
-        return "Unknown"
+        process_message(message)
 
-    partner_name = "".join(
-        char for char in str(partner_name).strip()
-        if 32 <= ord(char) <= 126
-    )[:255].strip()
-    
-    return partner_name or "Unknown"
+        partner_name = (
+            (message.get("partner") or {}).get("partner_name")
+            or "Unknown"
+        )
+
+        try:
+            publish_partner_metric(
+                partner_name,
+                "ProcessingSuccess",
+                1
+            )
+        except Exception as metric_error:
+            logger.error(
+                "Failed to publish ProcessingSuccess metric: %s",
+                str(metric_error)
+            )
+        logger.info("Processed message ID: %s", message_id)
+        return True
+
+    except Exception as e:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+
+        partner_name = (
+            (message.get("partner") or {}).get("partner_name") or "Unknown"
+            if isinstance(message, dict)
+            else "Unknown"
+        )
+
+        try:
+            publish_partner_metric(
+                partner_name,
+                "ProcessingFailed",
+                1
+            )
+        except Exception as metric_error:
+            logger.error(
+                "Failed to publish ProcessingFailed metric: %s",
+                str(metric_error)
+            )
+        logger.error("failed msg=%s: %s", message_id, str(e))
+        put_metric("LambdaProcessingFailures")
+        classify_failure(e)
+        if _last_failure_type:
+            partner_id = (
+                (message.get("partner") or {}).get("partner_id")
+                if isinstance(message, dict)
+                else None
+            )
+            put_crud_failure_metrics(_last_failure_type, partner_id)
+        return False
+
+
+# ---- SNS PATH: PULL MESSAGES FROM SQS ----
+def process_sqs_queue_messages():
+    if not METADATA_PROCESSING_QUEUE_NAME:
+        raise RuntimeError("METADATA_PROCESSING_QUEUE_NAME environment variable is not configured")
+
+    queue_url = sqs.get_queue_url(QueueName=METADATA_PROCESSING_QUEUE_NAME)["QueueUrl"]
+    processed = 0
+    failed    = 0
+
+    while True:
+        response = sqs.receive_message(
+            QueueUrl=queue_url,
+            MaxNumberOfMessages=10,
+            WaitTimeSeconds=2,
+            VisibilityTimeout=300,
+        )
+        messages = response.get("Messages", [])
+
+        if not messages:
+            logger.info("No more SQS messages available.")
+            break
+
+        logger.info("Received %d message(s) from SQS queue", len(messages))
+
+        for sqs_message in messages:
+            message_id = sqs_message.get("MessageId")
+            body       = sqs_message.get("Body")
+
+            if handle_one_message(message_id, body):
+                try:
+                    sqs.delete_message(
+                        QueueUrl=queue_url,
+                        ReceiptHandle=sqs_message["ReceiptHandle"],
+                    )
+                    logger.info("Deleted processed SQS message_id=%s", message_id)
+                except Exception:
+                    logger.exception(
+                        "Processed SQS message_id=%s but failed to delete it from the queue",
+                        message_id,
+                    )
+                processed += 1
+            else:
+                # Not deleted -> becomes visible again after VisibilityTimeout,
+                # and moves to the DLQ after maxReceiveCount.
+                failed += 1
+
+    return processed, failed
 
 
 # ---- LAMBDA HANDLER ----
 def lambda_handler(event, context):
     global conn
-    logger.info("Lambda triggered - %d records", len(event.get("Records", [])))
+    records = event.get("Records", [])
+    logger.info("Lambda triggered - %d records", len(records))
 
     try:
         conn = get_conn()
         logger.info("DB connection established")
     except Exception as e:
         logger.error("DB connection failed: %s", str(e))
-        put_metric("DBConnectionFailure")
         raise
 
-    failures = []
-    partner_metric_counts = defaultdict(int)
-
     try:
-        for record in event.get("Records", []):
+        # ---- SNS TRIGGER (CloudWatch alarm) -> PULL FROM SQS QUEUE ----
+        if any("Sns" in record for record in records):
+            logger.info("Triggered by SNS. Reading metadata messages from SQS queue.")
+            processed, failed = process_sqs_queue_messages()
+            logger.info("SNS run complete: processed=%d failed=%d", processed, failed)
+            return {
+                "statusCode": 200,
+                "processed": processed,
+                "failed": failed,
+            }
+
+        # ---- DIRECT SQS TRIGGER -> MESSAGES ARE IN THE EVENT ----
+        failures = []
+        for record in records:
             message_id = record.get("messageId")
-            raw_body = record.get("body")
-            message = None
-
-            try:
-                message = json.loads(raw_body)
-                if not isinstance(message, dict):
-                    raise ValueError("SQS message body must be a JSON object")
-
-                source = message.get("source") or {}
-                report = message.get("patient_received_report") or {}
-                logger.info(
-                    "msg %s type=%s batch=%s rows=%s",
-                    message_id,
-                    message.get("message_type"),
-                    source.get("batch_id") if isinstance(source, dict) else None,
-                    report.get("row_count") if isinstance(report, dict) else None,
-                )
-
-                process_message(message)
-
-                partner_name = get_partner_name(message)
-                record_partner_metric(
-                    partner_metric_counts,
-                    partner_name,
-                    "ProcessingSuccess",
-                )
-
-                logger.info(
-                    "DatabaseProcessing partner_name=%s "
-                    "message_id=%s status=SUCCESS",
-                    partner_name,
-                    message_id
-                )
-
-            except Exception as e:
-                logger.exception("failed msg=%s: %s", message_id, e)
-                
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-
-                partner_name = get_partner_name(message)
-
-                logger.error(
-                    "DatabaseProcessing partner_name=%s "
-                    "message_id=%s status=FAILED error=%s",
-                    partner_name,
-                    message_id,
-                    str(e)
-                )
-                
-                record_partner_metric(
-                    partner_metric_counts,
-                    partner_name,
-                    "ProcessingFailed",
-                )
-
-                try:
-                    put_metric("LambdaProcessingFailures")
-                except Exception as metric_error:
-                    logger.error(
-                        "Failed to publish LambdaProcessingFailures metric: %s",
-                        str(metric_error)
-                    )
+            if not handle_one_message(message_id, record.get("body")):
                 failures.append({"itemIdentifier": message_id})
-
+        return {"batchItemFailures": failures}
 
     finally:
-        try:
-            flush_partner_metrics(partner_metric_counts)
-        finally:
-            if conn is not None:
-                try:
-                    conn.close()
-                    logger.info("DB connection closed")
-                except Exception:
-                    logger.exception("Failed to close DB connection")
-                conn = None
-
-    return {"batchItemFailures": failures}
+        if conn is not None:
+            try:
+                conn.close()
+                logger.info("DB connection closed")
+            except Exception:
+                pass
+            conn = None
