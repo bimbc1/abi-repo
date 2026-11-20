@@ -1,0 +1,452 @@
+import os
+import json
+import logging
+import boto3
+import psycopg2
+    # ---RETRY UTILITY IMPORT WITH FALLBACK----
+try:
+    import retry_utils
+except ImportError as e:
+    logging.getLogger().error(
+        "retry_utils layer missing or failed to import: %s", e
+    )
+    class _RetryUtilsFallback:
+        @staticmethod
+        def handle_retry(error, event):
+            logging.getLogger().error(
+                "Fallback handle_retry invoked -- retry_utils layer not "
+                "available. Error: %s | Event: %s", error, event
+            )
+            return False
+    retry_utils = _RetryUtilsFallback()
+    # ---SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+    # ---ENVIRONMENT VARIABLES---
+DB_SECRET_ARN   = os.environ["DB_SECRET_ARN"]
+DB_HOST         = os.environ["DB_HOST"]
+DB_PORT         = int(os.environ.get("DB_PORT", "5432"))
+DB_NAME         = os.environ.get("DB_NAME", "ccda01")
+AWS_REGION      = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+    # ---AWS CLIENTS---
+sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
+    # ---CREDENTIALS CACHING---
+_cached_creds = None
+FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
+    # ---CRUD OPERATION TRACKING---
+    # Every statement run by ensure_tables() goes through TrackingCursor, which
+    # records whether it is a Create, Read, Update or Delete. When a database
+    # error happens, CRUDFailureEvents is published with that operation so the
+    # dashboard CRUD failure bar graphs show it.
+CRUD_OPERATIONS = {
+    "CREATE": "Create",
+    "INSERT": "Create",
+    "SELECT": "Read",
+    "ALTER": "Update",
+    "UPDATE": "Update",
+    "DO": "Update",
+    "DROP": "Delete",
+    "DELETE": "Delete",
+}
+_last_crud_operation = None
+def crud_operation_for(sql):
+    stripped = (sql or "").strip()
+    first_word = stripped.split(None, 1)[0].upper() if stripped else ""
+    return CRUD_OPERATIONS.get(first_word, "Other")
+class TrackingCursor:
+    """Wraps the cursor so every execute() records its CRUD operation."""
+    def __init__(self, cur):
+        global _last_crud_operation
+        _last_crud_operation = None
+        self._cur = cur
+    def execute(self, sql, params=None):
+        global _last_crud_operation
+        _last_crud_operation = crud_operation_for(sql)
+        return self._cur.execute(sql, params)
+    def fetchone(self):
+        return self._cur.fetchone()
+    # ---PUBLISHING CRUD FAILURE METRIC---
+def put_crud_failure_metric(operation):
+    try:
+        cloudwatch.put_metric_data(
+            Namespace="HIE/OperationalMonitoring",
+            MetricData=[{
+                "MetricName": "CRUDFailureEvents",
+                "Value": 1,
+                "Unit": "Count",
+                "Dimensions": [
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": operation},
+                ],
+            }],
+        )
+    except Exception as e:
+        logger.warning("Failed to publish CRUDFailureEvents metric: %s", e)
+    # ---RETRY HANDLER---
+def invoke_retry_handler(error, event) -> bool:
+    try:
+        result = retry_utils.handle_retry(error, event)
+        logger.info("Retry handler invoked successfully")
+        return bool(result)
+    except Exception as e:
+        logger.error(f"Retry handler invocation failed: {e}")
+        return False
+    # ---GETTING DATABASE CREDENTIALS FROM SECRETS MANAGER---
+def get_db_credentials():
+    global _cached_creds
+    if _cached_creds is not None:
+        return _cached_creds
+    secret_value = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+    creds = json.loads(secret_value["SecretString"])
+    creds["host"] = DB_HOST
+    creds.setdefault("port", DB_PORT)
+    creds.setdefault("dbname", DB_NAME)
+    creds.setdefault("sslmode", "require")
+    _cached_creds = creds
+    return creds
+    # ---GETTING DATABASE CONNECTION---
+def get_conn():
+    try:
+        creds = get_db_credentials()
+        return psycopg2.connect(
+            host=creds["host"],
+            port=creds["port"],
+            dbname=creds["dbname"],
+            user=creds["username"],
+            password=creds["password"],
+            sslmode=creds["sslmode"],
+        )
+        # ---IF CONNECTION FAILS, LOG TO CLOUDWATCH AND RAISE EXCEPTION---
+    except Exception as e:
+        cloudwatch.put_metric_data(
+            Namespace='HIE/OperationalMonitoring',
+            MetricData=[
+                {
+                    'MetricName': 'DatabaseConnectionFailures',
+                    'Value': 1,
+                    'Unit': 'Count'
+                }
+            ]
+        )
+        logger.exception("Database connection failure")
+        raise
+    # ---CREATING TABLES---
+def ensure_tables(cur):
+    logger.info("Creating/updating tables...")
+    cur.execute("CREATE EXTENSION IF NOT EXISTS pgcrypto;")
+        # ---CREATING PARTNER_REGISTRY TABLE---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS partner_registry (
+            partner_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            partner_batch_key UUID NOT NULL DEFAULT gen_random_uuid(),
+            partner_name VARCHAR(100) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            s3_bucket_arn VARCHAR(255) NOT NULL UNIQUE,
+            environment VARCHAR(10) NOT NULL,
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    # ---ENSURING PARTNER_NAME EXISTS AND IS FILLED ON EXISTING TABLES---
+    # Older partner_registry tables may lack partner_name, or have rows with a
+    # NULL or empty name. Those rows get a searchable placeholder
+    # ('UNKNOWN-<partner_id>') instead of '', so they are easy to find and fix.
+    # There is deliberately no default: a new partner must be inserted with
+    # its real name, and an insert without one should fail.
+    cur.execute("""
+        ALTER TABLE partner_registry
+        ADD COLUMN IF NOT EXISTS partner_name VARCHAR(100);
+        UPDATE partner_registry
+        SET partner_name = 'UNKNOWN-' || partner_id::text
+        WHERE partner_name IS NULL OR btrim(partner_name) = '';
+        ALTER TABLE partner_registry
+        ALTER COLUMN partner_name SET NOT NULL;
+    """)
+    # ---BLOCKING EMPTY PARTNER NAMES---
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'partner_name_not_blank'
+                  AND conrelid = 'partner_registry'::regclass
+            ) THEN
+                ALTER TABLE partner_registry
+                ADD CONSTRAINT partner_name_not_blank
+                CHECK (btrim(partner_name) <> '');
+            END IF;
+        END
+        $$;
+    """)
+    # ---FLAGGING PARTNERS THAT STILL NEED A REAL NAME---
+    cur.execute("""
+        SELECT COUNT(*) FROM partner_registry
+        WHERE partner_name LIKE 'UNKNOWN-%';
+    """)
+    placeholder_count = cur.fetchone()[0]
+    if placeholder_count:
+        logger.warning(
+            "%d partner_registry row(s) still have a placeholder partner_name "
+            "('UNKNOWN-<partner_id>') and need their real name set.",
+            placeholder_count,
+        )
+        # ---CREATING PARTNER_CONTACT_DETAILS TABLE---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS partner_contact_details (
+            contact_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            partner_id UUID NOT NULL,
+            partner_batch_key UUID NOT NULL,
+            partner_name VARCHAR(100) NOT NULL,
+            contact_email VARCHAR(100) NOT NULL,
+            contact_phone_number VARCHAR(20) NOT NULL,
+            contact_person VARCHAR(100) NOT NULL,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+        # ---CREATING PATIENT_DETAILS TABLE---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS patient_details (
+            partner_id UUID NOT NULL,
+            batch_id TEXT NOT NULL,
+            environment VARCHAR(20) NOT NULL,
+            file_name VARCHAR(255),
+            direction VARCHAR(10) NOT NULL,
+            edipi BIGINT NOT NULL,
+            ssn VARCHAR(11),
+            CONSTRAINT ssn_must_be_null CHECK (ssn IS NULL),
+            patient_last_name VARCHAR(100) NOT NULL,
+            patient_first_name VARCHAR(100) NOT NULL,
+            date_of_receipt_utc TIMESTAMPTZ,
+            date_of_disclosure_utc TIMESTAMP,
+            file_arrival_time_utc TIMESTAMPTZ NOT NULL,
+            sending_organization VARCHAR(255),
+            receiving_organization_id VARCHAR(64),
+            receiving_organization VARCHAR(255),
+            receiving_organization_name VARCHAR(255),
+            partner VARCHAR(150),
+            user_id TEXT,
+            user_name VARCHAR(150),
+            user_role VARCHAR(150),
+            role VARCHAR(50),
+            role_code VARCHAR(50),
+            purpose_of_use VARCHAR(255),
+            purpose_of_use_code VARCHAR(50),
+            document_format_code VARCHAR(255),
+            document_loinc_code VARCHAR(50),
+            document_id TEXT NOT NULL,
+            repository_id TEXT,
+            source_id TEXT,
+            ccda_file_name TEXT NOT NULL,
+            commonwell_indicator BOOLEAN,
+            ohin_indicator BOOLEAN
+        );
+    """)
+        # ---ADDING NEW COLUMNS TO PATIENT_DETAILS TABLE IF THEY DO NOT EXIST---
+    cur.execute("""
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS direction VARCHAR(10);
+        UPDATE patient_details SET direction = 'inbound' WHERE direction IS NULL;
+        ALTER TABLE patient_details ALTER COLUMN direction TYPE VARCHAR(10);
+        ALTER TABLE patient_details ALTER COLUMN direction SET NOT NULL;
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS file_name VARCHAR(255);
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS date_of_disclosure_utc TIMESTAMP;
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS receiving_organization_name VARCHAR(255);
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS receiving_organization_id VARCHAR(64);
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS commonwell_indicator BOOLEAN;
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS ohin_indicator BOOLEAN;
+    """)
+        # ---ENSURING THE CHECK CONSTRAINT ON SSN IS PRESENT---
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF NOT EXISTS (
+                SELECT 1
+                FROM pg_constraint
+                WHERE conname = 'ssn_must_be_null'
+                  AND conrelid = 'patient_details'::regclass
+            ) THEN
+                ALTER TABLE patient_details
+                ADD CONSTRAINT ssn_must_be_null
+                CHECK (ssn IS NULL);
+            END IF;
+        END
+        $$;
+    """)
+        # ---CREATING MANIFEST_BATCH TABLE---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS manifest_batch (
+            partner_id UUID NOT NULL,
+            batch_id TEXT NOT NULL,
+            partner_batch_key TEXT NOT NULL,
+            file_name TEXT,
+            manifest_file_count INTEGER,
+            actual_file_count INTEGER,
+            count_discrepancy INTEGER,
+            ingestion_method TEXT,
+            archived_date TIMESTAMPTZ DEFAULT NOW(),
+            submission_timestamp TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            updated_at TIMESTAMPTZ DEFAULT NOW(),
+            CONSTRAINT unique_batch UNIQUE (file_name)
+        );
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS extracted_files (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            batch_id TEXT NOT NULL,
+            ccda_file_name TEXT NOT NULL,
+            direction TEXT NOT NULL,
+            partner_id UUID,
+            document_loinc_code VARCHAR(50),
+            output_s3_key TEXT NOT NULL,
+            output_version_id TEXT,
+            extracted_at_utc TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_extracted UNIQUE (batch_id, ccda_file_name, direction)
+        );
+    """)
+
+
+    # ---CREATING EXTRACTION_FILTER_CONFIG TABLE---
+    # Drives what the extraction Lambda pulls. NULL = wildcard, so one table covers
+    # every mode: partner+LOINC, partner-only, LOINC-only (shared across partners), or all.
+
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS extraction_filter_config (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            partner_id UUID NULL REFERENCES partner_registry(partner_id),
+            document_loinc_code VARCHAR(50) NULL,
+            enabled BOOLEAN NOT NULL DEFAULT TRUE,
+            description TEXT,
+            created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            CONSTRAINT uq_filter UNIQUE (partner_id, document_loinc_code)
+        );
+    """)
+    # ---RENAME LEGACY COLUMN batch_name -> file_name IF PRESENT---
+    cur.execute("""
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1
+                FROM information_schema.columns
+                WHERE table_name = 'manifest_batch'
+                  AND column_name = 'batch_name'
+            ) THEN
+                ALTER TABLE manifest_batch
+                RENAME COLUMN batch_name TO file_name;
+            END IF;
+        END
+        $$;
+    """)
+        # ---ENSURING THE UNIQUE CONSTRAINT ON FILE_NAME IS PRESENT---
+    cur.execute("""
+        ALTER TABLE manifest_batch
+        DROP CONSTRAINT IF EXISTS unique_batch;
+    """)
+    cur.execute("""
+        ALTER TABLE manifest_batch
+        ADD CONSTRAINT unique_batch UNIQUE (file_name);
+    """)
+    # ---CREATING PARTNER_SCHEDULE TABLE---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS partner_schedule (
+            schedule_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            partner_id UUID NOT NULL,
+            failure_type TEXT,
+            last_alert_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+            expected_interval_seconds INTEGER,
+            grace_seconds INTEGER,
+            breach_flag BOOLEAN DEFAULT FALSE,
+            last_breach_email_sent_at TIMESTAMPTZ,
+            last_recovery_email_sent_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT NOW(),
+            expected_files_per_transmission INTEGER DEFAULT 6,
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    # ---ADDING EXPECTED_FILES_PER_TRANSMISSION TO EXISTING PARTNER_SCHEDULE TABLES---
+    # New tables already get this column from the CREATE above. This ALTER is
+    # only for environments where partner_schedule existed before the column
+    # was added; on a newly created table it does nothing.
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        ADD COLUMN IF NOT EXISTS expected_files_per_transmission INTEGER DEFAULT 6;
+    """)
+    # ---ENSURING LAST_ALERT_AT EXISTS AND HAS A DEFAULT ON EXISTING TABLES---
+    # CREATE TABLE IF NOT EXISTS skips tables that already exist, so older
+    # partner_schedule tables are brought up to date here. Existing rows are
+    # filled with NOW(). SET DEFAULT covers tables that already had the column
+    # but without a default.
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        ADD COLUMN IF NOT EXISTS last_alert_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+        ALTER TABLE partner_schedule
+        ALTER COLUMN last_alert_at SET DEFAULT NOW();
+    """)
+    # ---DROPPING TIMEZONE COLUMN FROM PARTNER_SCHEDULE TABLE IF IT EXISTS---
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        DROP COLUMN IF EXISTS timezone;
+    """)
+    cur.execute("""
+        ALTER TABLE partner_schedule
+        ALTER COLUMN expected_interval_seconds DROP NOT NULL;
+    """)
+    # ---CREATING PARTNER_TRANSMISSION_STATE TABLE---
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS partner_transmission_state (
+            state_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            partner_id UUID NOT NULL,
+            last_seen_at TIMESTAMPTZ NOT NULL,
+            batch_id TEXT NOT NULL,
+            last_object_key TEXT,
+            updated_at TIMESTAMPTZ DEFAULT NOW()
+        );
+    """)
+    logger.info("Tables created/updated successfully.")
+
+    # ---LAMBDA HANDLER---
+def lambda_handler(event, context):
+    logger.info("Running lambda_tables_generator")
+    conn = None
+    try:
+        conn = get_conn()
+    except Exception as e:
+        logger.exception("Database connection failed")
+        if not invoke_retry_handler(e, event):
+            raise
+        return {
+            "statusCode": 202,
+            "body": json.dumps("Database connection failed; retry handler invoked.")
+        }
+    try:
+        with conn.cursor() as cur:
+            ensure_tables(TrackingCursor(cur))
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        if isinstance(e, psycopg2.Error) and _last_crud_operation:
+            logger.error(
+                "CRUD failure | operation=%s | cause=%s",
+                _last_crud_operation,
+                type(e).__name__,
+            )
+            put_crud_failure_metric(_last_crud_operation)
+        global _cached_creds
+        _cached_creds = None
+        logger.exception("Failed creating tables")
+        raise
+    finally:
+        if conn:
+            conn.close()
+    return {
+        "statusCode": 200,
+        "body": json.dumps("Tables created successfully.")
+    }
