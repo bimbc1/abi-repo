@@ -30,15 +30,12 @@ DB_NAME         = os.environ.get("DB_NAME", "ccda01")
 AWS_REGION      = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
     # ---AWS CLIENTS---
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
-cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
     # ---CREDENTIALS CACHING---
 _cached_creds = None
-FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
     # ---CRUD OPERATION TRACKING---
     # Every statement run by ensure_tables() goes through TrackingCursor, which
     # records whether it is a Create, Read, Update or Delete. When a database
-    # error happens, CRUDFailureEvents is published with that operation so the
-    # dashboard CRUD failure bar graphs show it.
+    # error happens, that operation is written to the logs.
 CRUD_OPERATIONS = {
     "CREATE": "Create",
     "INSERT": "Create",
@@ -66,23 +63,6 @@ class TrackingCursor:
         return self._cur.execute(sql, params)
     def fetchone(self):
         return self._cur.fetchone()
-    # ---PUBLISHING CRUD FAILURE METRIC---
-def put_crud_failure_metric(operation):
-    try:
-        cloudwatch.put_metric_data(
-            Namespace="HIE/OperationalMonitoring",
-            MetricData=[{
-                "MetricName": "CRUDFailureEvents",
-                "Value": 1,
-                "Unit": "Count",
-                "Dimensions": [
-                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
-                    {"Name": "FailureType", "Value": operation},
-                ],
-            }],
-        )
-    except Exception as e:
-        logger.warning("Failed to publish CRUDFailureEvents metric: %s", e)
     # ---RETRY HANDLER---
 def invoke_retry_handler(error, event) -> bool:
     try:
@@ -119,16 +99,6 @@ def get_conn():
         )
         # ---IF CONNECTION FAILS, LOG TO CLOUDWATCH AND RAISE EXCEPTION---
     except Exception as e:
-        cloudwatch.put_metric_data(
-            Namespace='HIE/OperationalMonitoring',
-            MetricData=[
-                {
-                    'MetricName': 'DatabaseConnectionFailures',
-                    'Value': 1,
-                    'Unit': 'Count'
-                }
-            ]
-        )
         logger.exception("Database connection failure")
         raise
     # ---CREATING TABLES---
@@ -438,7 +408,6 @@ def lambda_handler(event, context):
                 _last_crud_operation,
                 type(e).__name__,
             )
-            put_crud_failure_metric(_last_crud_operation)
         global _cached_creds
         _cached_creds = None
         logger.exception("Failed creating tables")
