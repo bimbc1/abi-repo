@@ -571,8 +571,8 @@ def get_partner_name_for_bucket(bucket):
     # after the S3 event, so the search is retried briefly.
 TRANSFER_LOG_GROUP_PREFIX = "/aws/transfer/"
 TRANSFER_LOG_LOOKBACK_SECONDS = 900
-TRANSFER_LOG_ATTEMPTS = 6
-TRANSFER_LOG_WAIT_SECONDS = 10
+TRANSFER_LOG_ATTEMPTS = 3
+TRANSFER_LOG_WAIT_SECONDS = 2
 _transfer_log_groups = []
 def get_transfer_log_groups():
     if not _transfer_log_groups:
@@ -1188,6 +1188,7 @@ def extract_disclosure_report_rows(bucket, key):
             "document_id": parts[15],
             "ccda_file": parts[16],
             "commonwell_indicator": parts[17],
+            "ohin_indicator": (parts[18].strip() or None) if len(parts) > 18 else None,
         })
     return rows
     # ---SQS MESSAGE BUILDERS---
