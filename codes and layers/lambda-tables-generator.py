@@ -239,7 +239,8 @@ def ensure_tables(cur):
             repository_id TEXT,
             source_id TEXT,
             ccda_file_name TEXT NOT NULL,
-            commonwell_indicator BOOLEAN
+            commonwell_indicator BOOLEAN,
+            ohin_indicator BOOLEAN
         );
     """)
         # ---ADDING NEW COLUMNS TO PATIENT_DETAILS TABLE IF THEY DO NOT EXIST---
@@ -259,6 +260,8 @@ def ensure_tables(cur):
         ADD COLUMN IF NOT EXISTS receiving_organization_id VARCHAR(64);
         ALTER TABLE patient_details
         ADD COLUMN IF NOT EXISTS commonwell_indicator BOOLEAN;
+        ALTER TABLE patient_details
+        ADD COLUMN IF NOT EXISTS ohin_indicator BOOLEAN;
     """)
         # ---ENSURING THE CHECK CONSTRAINT ON SSN IS PRESENT---
     cur.execute("""
