@@ -1,0 +1,1516 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: HIE Analytics Operational Monitoring CloudWatch Dashboard and Alarms
+
+Parameters:
+  Env:
+    Type: String
+    AllowedValues:
+      - dev
+      - stg
+      - prod
+  TransferServerId:
+    Type: String
+    Default: s-4603e09e711e4cfa8
+    Description: ID of the existing AWS Transfer Family server.
+
+Conditions:
+  IsGovCloud: !Equals
+    - !Ref AWS::Partition
+    - aws-us-gov
+
+
+Resources:
+
+
+  DatabaseConnectionFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-DatabaseConnectionFailures
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails to connect to the database.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: DatabaseConnectionFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  MetadataLambdaFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-LambdaFailures
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails while processing a record.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: MetadataLambdaFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  ServiceAvailabilityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-ServiceAvailability
+      AlarmDescription: Fires when the Lambda reports itself unavailable (retry
+        handler also failed), or when it has not reported availability at all.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: ServiceAvailability
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  CountMismatchEventsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-CountMismatchEvents
+      AlarmDescription: Fires when a batch's actual file/row count does not match its manifest.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: CountMismatchEvents
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RetryHandlerInvocationFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-RetryHandlerFailures
+      AlarmDescription: Fires when the retry_utils handler itself fails to run -- no
+        retry is guaranteed for the underlying error.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: RetryHandlerInvocationFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  ProcessingDelayAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-ProcessingDelay
+      AlarmDescription: Fires when a file takes 15 minutes (900 seconds) or longer to process.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: ProcessingDelaySeconds
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 900
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  TablesGeneratorErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TablesGenerator-LambdaErrors
+      AlarmDescription: Fires when the Tables Generator Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  DatabaseProcessorErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: DatabaseProcessor-LambdaErrors
+      AlarmDescription: Fires when the Database Processor Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  CCDAExtractionErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: CCDAExtraction-LambdaErrors
+      AlarmDescription: Fires when the CCDA Extraction Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  PayloadMonitoringErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: PayloadMonitoring-LambdaErrors
+      AlarmDescription: Fires when the Payload Monitoring Lambda returns an error.
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSAvailabilityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-CPUUtilization
+      AlarmDescription: Fires when the RDS database CPU is 80% or higher, or when
+        the database stops reporting metrics (database down).
+      Namespace: AWS/RDS
+      MetricName: CPUUtilization
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: breaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  DatabaseProcessorDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: DatabaseProcessor-DLQMessages
+      AlarmDescription: Fires when a message lands in the Database Processor dead-letter queue.
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-dlq-name-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  TransferFamilyUploadFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: TransferFamily-UploadFailures
+      AlarmDescription: Fires when a file upload to the Transfer Family server fails (PARTIAL_CLOSE).
+      Namespace: HIE/OperationalMonitoring
+      MetricName: UploadFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  MetadataProcessingQueueAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: MetadataProcessingQueue-OldestMessageAge
+      AlarmDescription: Fires when the oldest message in the metadata processing queue has waited 15 minutes (900 seconds) or longer.
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub project-hie-analytics-metadata-processing-queue-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 900
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSDatabaseConnectionsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-DatabaseConnections
+      AlarmDescription: Fires when the RDS database has 80 or more open connections.
+      Namespace: AWS/RDS
+      MetricName: DatabaseConnections
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 80
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSFreeStorageSpaceAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-FreeStorageSpace
+      AlarmDescription: Fires when the RDS database has less than 2 GB of free storage space.
+      Namespace: AWS/RDS
+      MetricName: FreeStorageSpace
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 2147483648
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  RDSFreeableMemoryAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: RDS-FreeableMemory
+      AlarmDescription: Fires when the RDS database has less than 256 MB of freeable memory.
+      Namespace: AWS/RDS
+      MetricName: FreeableMemory
+      Dimensions:
+        - Name: DBInstanceIdentifier
+          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+      Statistic: Minimum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 268435456
+      ComparisonOperator: LessThanThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  SNSPublishFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: ManifestMetadata-SNSPublishFailures
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails to send an alert or recovery email through SNS.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: SNSPublishFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  TransferLogTransformer:
+    Type: AWS::Logs::Transformer
+    Properties:
+      LogGroupIdentifier: !Sub /aws/transfer/${TransferServerId}
+      TransformerConfig:
+        - Grok:
+            Match: '%{NOTSPACE:stream} %{NOTSPACE:activity} %{GREEDYDATA:details}'
+        - ParseKeyValue:
+            Source: details
+            FieldDelimiter: ' '
+            KeyValueDelimiter: '='
+            NonMatchValue: 'none'
+        - CopyValue:
+            Entries:
+              - Source: stream
+                Target: tfuser
+        - SubstituteString:
+            Entries:
+              - Source: tfuser
+                From: '^(.+)\.[0-9A-Za-z]+$'
+                To: '$1'
+
+  TransferFamilyUsersMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: TransferLogTransformer
+    Properties:
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
+      ApplyOnTransformedLogs: true
+      FilterPattern: '{ ($.activity = "CONNECTED") && ($.tfuser = "*") }'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: TransferFamilyConnectedUsers
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: PartnerName
+              Value: $.tfuser
+
+  LoginFailuresByUserMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: TransferLogTransformer
+    Properties:
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
+      ApplyOnTransformedLogs: true
+      FilterPattern: '{ $.activity = "AUTH_FAILURE" }'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: LoginFailuresByUser
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: All
+              Value: $.User
+
+  TransferFamilyFilesInMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    DependsOn: TransferLogTransformer
+    Properties:
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
+      ApplyOnTransformedLogs: true
+      FilterPattern: '{ ($.activity = "CLOSE") && ($.BytesIn = "*") }'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: TransferFamilyFilesIn
+          MetricValue: '1'
+          Unit: Count
+          Dimensions:
+            - Key: All
+              Value: $.tfuser
+
+  UploadFailuresMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
+      FilterPattern: '"PARTIAL_CLOSE"'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: UploadFailures
+          MetricValue: '1'
+          DefaultValue: 0
+          Unit: Count
+
+  # Login failures per partner: every AUTH_FAILURE line is sent to the Manifest
+  # Metadata Lambda, which finds the user's partner and publishes PartnerLoginFailures.
+  TransferLoginFailuresLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !ImportValue
+        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+      Action: lambda:InvokeFunction
+      Principal: logs.amazonaws.com
+      SourceAccount: !Ref AWS::AccountId
+      SourceArn: !Sub arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/transfer/${TransferServerId}:*
+
+  TransferLoginFailuresSubscriptionFilter:
+    Type: AWS::Logs::SubscriptionFilter
+    DependsOn: TransferLoginFailuresLambdaPermission
+    Properties:
+      LogGroupName: !Sub /aws/transfer/${TransferServerId}
+      FilterPattern: '"AUTH_FAILURE"'
+      DestinationArn: !ImportValue
+        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+
+  ManifestMetadataDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub project-hie-analytics-operational-dashboard-${Env}
+      DashboardBody: !Sub
+        - |
+          {
+            "variables": [
+              {
+                "type": "pattern",
+                "pattern": "__PARTNER__",
+                "inputType": "select",
+                "id": "partner",
+                "label": "Partner",
+                "visible": true,
+                "values": [
+                  {
+                    "value": "All",
+                    "label": "All"
+                  }
+                ],
+                "defaultValue": "All"
+              }
+            ],
+            "widgets": [
+              {
+                "type": "text",
+                "x": 0,
+                "y": 0,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "# Project HIE Analytics Operational Monitoring - ${Env}"
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 1,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Operational Monitoring Status"
+                }
+              },
+              {
+                "type": "alarm",
+                "x": 0,
+                "y": 2,
+                "width": 24,
+                "height": 4,
+                "properties": {
+                  "title": "Operational Monitoring Status",
+                  "alarms": [
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-DatabaseConnectionFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-LambdaFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ProcessingDelay",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TablesGenerator-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:CCDAExtraction-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:PayloadMonitoring-LambdaErrors",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-CPUUtilization",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TransferFamily-UploadFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MetadataProcessingQueue-OldestMessageAge",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-DatabaseConnections",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures"
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 6,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## AWS Transfer Family (select a partner, or All, from the Partner dropdown at the top)"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 7,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Transfer family user:Files in",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 1800,
+                  "setPeriodToTimeRange": true,
+                  "liveData": true,
+                  "sparkline": false,
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerTransferFilesIn\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "tu",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "FILL(SUM(tu), 0)",
+                        "id": "tfiles",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"PartnerExpectedFiles\" PartnerId=\"__PARTNER__\"', 'Maximum')",
+                        "id": "ex",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "TIME_SERIES(1)",
+                        "id": "t",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "t * 0 + MAX(RUNNING_SUM(tfiles))",
+                        "id": "totrecv",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "t * MAX(SUM(ex)) * PERIOD(t) / 1800",
+                        "id": "totexp",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "totexp + 0",
+                        "id": "pt",
+                        "label": "Expected",
+                        "color": "#7f7f7f"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "totrecv + 0",
+                        "id": "pr",
+                        "label": "Received",
+                        "color": "#2ca02c"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "MAX([totexp - totrecv, t * 0])",
+                        "id": "ps",
+                        "label": "Shortfall",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 13,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Upload failures",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "UploadFailures",
+                      {
+                        "label": "Upload failures",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 19,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Authentication (select a partner, or All, from the Partner dropdown at the top)"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 20,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Partner login failures",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "u1",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(u1)",
+                        "id": "u2",
+                        "label": "Login failures",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 20,
+                "width": 16,
+                "height": 6,
+                "properties": {
+                  "title": "Partner login failures - by partner",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "b1",
+                        "label": "${!PROP('Dim.TransferUser')}"
+                      }
+                    ]
+                  ],
+                  "view": "table",
+                  "table": {
+                    "layout": "horizontal",
+                    "showTimeSeriesData": false,
+                    "summaryColumns": [
+                      "SUM"
+                    ]
+                  },
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 26,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Database Health (select a partner, or All, from the Partner dropdown at the top)"
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 27,
+                "width": 24,
+                "height": 2,
+                "properties": {
+                  "markdown": "Open the CloudWatch metrics (CPU utilization, freeable memory, free storage space) for the database:\n\n${DatabaseHealthButtons}"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 29,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "CRUD failures - Create",
+                  "region": "${AWS::Region}",
+                  "view": "bar",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "showUnits": false
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "Create",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Manifest Metadata Lambda",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "Create",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Database Processor Lambda",
+                        "color": "#2ca02c"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${PayloadMonitoringFunctionName}",
+                      "FailureType",
+                      "Create",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Payload Monitoring Lambda",
+                        "color": "#9467bd"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${CCDAExtractionFunctionName}",
+                      "FailureType",
+                      "Create",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "CCDA Extraction Lambda",
+                        "color": "#8c564b"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 6,
+                "y": 29,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "CRUD failures - Read",
+                  "region": "${AWS::Region}",
+                  "view": "bar",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "showUnits": false
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "Read",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Manifest Metadata Lambda",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "Read",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Database Processor Lambda",
+                        "color": "#2ca02c"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${PayloadMonitoringFunctionName}",
+                      "FailureType",
+                      "Read",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Payload Monitoring Lambda",
+                        "color": "#9467bd"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${CCDAExtractionFunctionName}",
+                      "FailureType",
+                      "Read",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "CCDA Extraction Lambda",
+                        "color": "#8c564b"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 12,
+                "y": 29,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "CRUD failures - Update",
+                  "region": "${AWS::Region}",
+                  "view": "bar",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "showUnits": false
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "Update",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Manifest Metadata Lambda",
+                        "color": "#1f77b4"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "Update",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Database Processor Lambda",
+                        "color": "#2ca02c"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${PayloadMonitoringFunctionName}",
+                      "FailureType",
+                      "Update",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "Payload Monitoring Lambda",
+                        "color": "#9467bd"
+                      }
+                    ],
+                    [
+                      "HIE/OperationalMonitoring",
+                      "CRUDFailureEvents",
+                      "FunctionName",
+                      "${CCDAExtractionFunctionName}",
+                      "FailureType",
+                      "Update",
+                      "PartnerId",
+                      "__PARTNER__",
+                      {
+                        "label": "CCDA Extraction Lambda",
+                        "color": "#8c564b"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 35,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Workflow Health"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 36,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Failed Database Connections - Manifest Metadata Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 36,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Failed Database Connections - Database Processor Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${DatabaseProcessorFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 36,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Failed Database Connections - CCDA Extraction Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${CCDAExtractionFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 42,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Failed Database Connections - Monitoring Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${PayloadMonitoringFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 42,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Database Processor DLQ Messages",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Maximum",
+                  "metrics": [
+                    [
+                      "AWS/SQS",
+                      "ApproximateNumberOfMessagesVisible",
+                      "QueueName",
+                      "${DlqName}"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 42,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "SQS Publishing Failures - Manifest Metadata Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 10
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${ManifestMetadataFunctionName}",
+                      "FailureType",
+                      "SQSPublishFailure",
+                      {
+                        "label": "SQS publish",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 54,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Lambda Health"
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 55,
+                "width": 24,
+                "height": 3,
+                "properties": {
+                  "markdown": "Open the CloudWatch metrics (invocations, errors, throttles, concurrent executions, duration) for each Lambda function:\n\n${LambdaHealthButtons}"
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 58,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Storage & Processing"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 59,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Storage & Processing",
+                  "region": "${AWS::Region}",
+                  "view": "timeSeries",
+                  "period": 300,
+                  "stat": "Sum",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId} MetricName=\"S3ObjectArrivals\" PartnerId=\"__PARTNER__\"', 'Sum', 300)",
+                        "id": "sa",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(sa)",
+                        "id": "sat",
+                        "label": "S3ObjectArrivals"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 16,
+                "y": 59,
+                "width": 6,
+                "height": 6,
+                "properties": {
+                  "title": "ProcessingDelaySeconds",
+                  "region": "${AWS::Region}",
+                  "view": "singleValue",
+                  "period": 300,
+                  "stat": "Average",
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "ProcessingDelaySeconds"
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "text",
+                "x": 0,
+                "y": 65,
+                "width": 24,
+                "height": 1,
+                "properties": {
+                  "markdown": "## Partner Connectivity (select a partner, or All, from the Partner dropdown at the top)"
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 66,
+                "width": 24,
+                "height": 6,
+                "properties": {
+                  "title": "Partner Connectivity - Breach Status",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('Namespace=\"HIE/PartnerMonitoring\" MetricName=\"BreachEvents\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "s2",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(s2)",
+                        "id": "m2",
+                        "label": "Breach events",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m2>0,m2)",
+                        "id": "e3",
+                        "label": "IN BREACH",
+                        "color": "#d62728"
+                      }
+                    ]
+                  ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 72,
+                "width": 24,
+                "height": 6,
+                "properties": {
+                  "title": "Partners Not In Breach",
+                  "region": "${AWS::Region}",
+                  "metrics": [
+                    [
+                      {
+                        "expression": "SEARCH('Namespace=\"HIE/PartnerMonitoring\" MetricName=\"PartnerNotInBreach\" PartnerId=\"__PARTNER__\"', 'Maximum')",
+                        "id": "s3",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "MAX(s3)",
+                        "id": "m3",
+                        "label": "Partners not in breach",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "IF(m3>0,m3)",
+                        "id": "e5",
+                        "label": "NOT IN BREACH",
+                        "color": "#2ca02c"
+                      }
+                    ]
+                  ],
+                  "view": "singleValue",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true
+                }
+              }
+            ]
+          }
+        - ManifestMetadataFunctionName: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+          TablesGeneratorFunctionName: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
+          DatabaseProcessorFunctionName: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+          CCDAExtractionFunctionName: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+          PayloadMonitoringFunctionName: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+
+          DlqName: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-dlq-name-${Env}
+          # DATABASE HEALTH BUTTONS -- one list item per database. 
+          DatabaseHealthButtons: !Join
+            - ' '
+            - - !Sub
+                - '[button:primary:${Label}
+                  (${Db})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Average~period~300~title~''${Db}~metrics~%28~%28~''AWS*2fRDS~''CPUUtilization~''DBInstanceIdentifier~''${Db}%29~%28~''.~''FreeableMemory~''.~''.~%28yAxis~''right%29%29~%28~''.~''FreeStorageSpace~''.~''.~%28yAxis~''right%29%29%29%29)'
+                - Label: RDS Database
+                  Db: !Sub project-hie-analytics-admin-registry-db-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
+          LambdaHealthButtons: !Join
+            - ' '
+            - - !Sub
+                - '[button:primary:${Label}
+                  (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
+                - Label: Manifest Metadata Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
+              - !Sub
+                - '[button:primary:${Label}
+                  (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
+                - Label: Tables Generator Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
+              - !Sub
+                - '[button:primary:${Label}
+                  (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
+                - Label: Database Processor Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
+              - !Sub
+                - '[button:primary:${Label}
+                  (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
+                - Label: CCDA Extraction Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
+              - !Sub
+                - '[button:primary:${Label}
+                  (${Fn})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Sum~period~300~title~''${Fn}~metrics~%28~%28~''AWS*2fLambda~''Invocations~''FunctionName~''${Fn}%29~%28~''.~''Errors~''.~''.%29~%28~''.~''Throttles~''.~''.%29~%28~''.~''ConcurrentExecutions~''.~''.~%28stat~''Maximum%29%29~%28~''.~''Duration~''.~''.~%28stat~''Average~yAxis~''right%29%29%29%29)'
+                - Label: Payload Monitoring Lambda
+                  Fn: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+                  Host: !If
+                    - IsGovCloud
+                    - console.amazonaws-us-gov.com
+                    - console.aws.amazon.com
