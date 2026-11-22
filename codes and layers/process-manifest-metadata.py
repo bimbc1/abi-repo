@@ -3,6 +3,8 @@ import json
 import io
 import re
 import zipfile
+import gzip
+import base64
 import logging
 import time
 from datetime import datetime, timezone
@@ -23,7 +25,7 @@ except ImportError as e:
                 "Fallback handle_retry invoked -- retry_utils layer not "
                 "available. Error: %s | Event: %s", error, event
             )
-            raise RuntimeError("retry_utils layer not available; no retry was performed.")
+            raise RuntimeError("retry_utils layer is not available; no retry was scheduled.")
     retry_utils = _RetryUtilsFallback()
     # --SETTING UP LOGGER FOR WRITING LOGS TO CLOUDWATCH---
 logger = logging.getLogger()
@@ -73,7 +75,7 @@ def invoke_retry_handler(error, event):
         retry_metric_name = "SQSPublishRetries"
         failure_type = "SQSPublishFailure"
     else:
-        retry_metric_name = "OtherRetries"
+        retry_metric_name = "SNSRetries"
         failure_type = "OtherFailure"
         # ---PUTTING METRIC FOR RETRY---
     put_metric(
@@ -105,7 +107,6 @@ def extract_batch_id(filename):
         "outbound",
         "received",
         "disclosure",
-        "disclo",
     }
     for index, part in enumerate(parts):
         if part.lower() in markers:
@@ -124,18 +125,25 @@ def is_target_file(filename):
 def classify_batch_type(filename):
     lower = filename.lower()
     if is_manifest_file(filename):
-        if "inbound" in lower:
-            return "RECEIVED"
         if "outbound" in lower:
+            return "RECEIVED"
+        if "inbound" in lower:
             return "DISCLOSURE"
         return None
     if is_report_file(filename) or is_zip_file(filename):
         if "received" in lower:
             return "RECEIVED"
-        if "disclo" in lower:
+        if "disclosure" in lower:
             return "DISCLOSURE"
         return None
     return None
+    # --- BATCH TYPE LABEL FOR LOGS (RECEIVED -> OUTBOUND_RECEIVED, DISCLOSURE -> INBOUND_DISCLOSURE) ---
+BATCH_TYPE_LOG_LABELS = {
+    "RECEIVED": "OUTBOUND_RECEIVED",
+    "DISCLOSURE": "INBOUND_DISCLOSURE",
+}
+def batch_type_label(batch_type):
+    return BATCH_TYPE_LOG_LABELS.get(batch_type, batch_type)
     # --- S3 BATCH FILE DISCOVERY ---
 def list_batch_keys(bucket, batch_id):
     keys = []
@@ -184,7 +192,7 @@ def find_available_keys(bucket, batch_id, batch_type):
             "Batch %s | type=%s | ignoring %d file(s) that belong to a "
             "different batch type or have no recognizable type marker: %s",
             batch_id,
-            batch_type,
+            batch_type_label(batch_type),
             len(ignored_files),
             ignored_files,
         )
@@ -233,7 +241,7 @@ def log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_k
         logger.info(
             "Batch %s | type=%s | Batch received with %d file(s): %s",
             batch_id,
-            batch_type,
+            batch_type_label(batch_type),
             len(batch_files),
             ", ".join(batch_files),
         )
@@ -302,6 +310,12 @@ def reset_crud_tracking():
     global _last_crud_operation
     _last_crud_operation = None
     # --- OPERATIONAL ALERT COOLDOWN AND SNS ALERTING ---
+    # NOTE: The alert cooldown (_last_alert_times) is kept in memory inside each
+    # Lambda container. It is not shared between containers and is lost on a cold
+    # start. So if the Lambda runs in more than one container at the same time, or
+    # a new container starts, the same failure can send more than one alert email
+    # within the cooldown window. This is accepted: it only causes an occasional
+    # duplicate email and never stops a first alert from being sent.
 def _should_publish_alert(failure_category):
     """Determine whether an alert may be published for the category."""
     now = datetime.now(timezone.utc)
@@ -367,11 +381,6 @@ def _publish_operational_alert(subject, message, failure_category):
             failure_category,
             exc_info=True,
         )
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="SNSPublishFailures",
-            value=1
-        )
         return False
 def notify_database_connection_failure(failure_category, error_message, context=None):
     request_id = (
@@ -385,7 +394,7 @@ def notify_database_connection_failure(failure_category, error_message, context=
                 failure_type=failure_category,
                 error=str(error_message),
             )
-        except (KeyError, IndexError, ValueError):
+        except (KeyError, IndexError):
             logger.warning(
                 "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
                 "placeholder in the template); falling back to the built-in "
@@ -424,7 +433,7 @@ def notify_sqs_publish_failure(error, context=None):
                 failure_type="SQS Publish Failure",
                 error=str(error),
             )
-        except (KeyError, IndexError, ValueError):
+        except (KeyError, IndexError):
             logger.warning(
                 "FAILURE_MESSAGE_TYPE could not be formatted (unexpected "
                 "placeholder in the template); falling back to the built-in "
@@ -487,43 +496,6 @@ def get_conn(publish_failure_metric=True):
         raise DatabaseConnectionError(
             "Manifest processing failed due to database connection error."
         ) from error
-    # ---ONE SHARED DATABASE CONNECTION PER INVOCATION (one per file arrival)---
-    # The secret is read from Secrets Manager once, when this connection is opened,
-    # and the connection is closed at the end of every invocation. The next file
-    # arrival opens a new connection with a fresh read of the secret, so a rotated
-    # password is always picked up. If the connection fails, it is not retried
-    # again in the same invocation.
-_shared_conn = {"conn": None, "failed": False}
-def get_shared_conn():
-    if _shared_conn["failed"]:
-        raise DatabaseConnectionError(
-            "Manifest processing failed due to database connection error."
-        )
-    conn = _shared_conn["conn"]
-    if conn is None:
-        try:
-            conn = get_conn()
-        except DatabaseConnectionError:
-            _shared_conn["failed"] = True
-            raise
-        _shared_conn["conn"] = conn
-    return conn
-def rollback_shared_conn():
-    conn = _shared_conn["conn"]
-    if conn is not None:
-        try:
-            conn.rollback()
-        except Exception as e:
-            logger.warning("Could not roll back shared database connection: %s", e)
-def close_shared_conn():
-    conn = _shared_conn["conn"]
-    _shared_conn["conn"] = None
-    _shared_conn["failed"] = False
-    if conn is not None:
-        try:
-            conn.close()
-        except Exception as e:
-            logger.warning("Could not close shared database connection: %s", e)
     # ---SQS MESSAGE HELPERS---
 def publish_metadata_message(message_body, message_attributes=None):
     try:
@@ -577,20 +549,21 @@ _bucket_partner_ids = {}
 def get_partner_name_for_bucket(bucket):
     if bucket in _bucket_partner_names:
         return _bucket_partner_names[bucket]
+    conn = None
     try:
-        conn = get_shared_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             partner_id, _, _ = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
         _bucket_partner_names[bucket] = partner_name
         _bucket_partner_ids[bucket] = partner_id
         return partner_name
-    except DatabaseConnectionError:
-        raise
     except Exception as e:
-        rollback_shared_conn()
         logger.warning("Could not look up partner for bucket %s: %s", bucket, e)
         return None
+    finally:
+        if conn:
+            conn.close()
     # ---TRANSFER FAMILY USER FOR AN ARRIVED FILE (read from the Transfer Family log group)---
     # S3 gives us the bucket and file. The Transfer Family upload log line for that same
     # file ("CLOSE" with path /<bucket>/<key>) is in a log stream named "<user>.<session-id>",
@@ -609,9 +582,34 @@ def get_transfer_log_groups():
 def transfer_user_from_stream(stream_name):
     match = re.match(r"^(?:.*/)?(.+?)(?:\.[0-9a-fA-F]{16,})?$", stream_name or "")
     return match.group(1) if match else None
+def is_close_line_for_path(message, path):
+    """True if a Transfer Family log line is the upload (CLOSE) of this exact path.
+    Works for both log formats:
+      JSON: {"activity-type":"CLOSE","path":"/<bucket>/<key>","bytes-in":...}
+      text: <user>.<session-id> CLOSE Path=/<bucket>/<key> BytesIn=...
+    """
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        return record.get("activity-type") == "CLOSE" and record.get("path") == path
+    words = text.split()
+    if "CLOSE" not in words[:3]:
+        return False
+    return re.search(r"(?:^|\s)Path=" + re.escape(path) + r"(?:\s|$)", text) is not None
+def transfer_user_from_text_line(message):
+    """Text format lines start with "<user>.<session-id>"; JSON lines return None."""
+    first = (message or "").strip().split(" ", 1)[0]
+    if not first or first.startswith("{"):
+        return None
+    return transfer_user_from_stream(first)
 def find_transfer_family_user(bucket, key):
-    path = f"/{bucket}/{key}".replace('"', '\\"')
-    pattern = '{ ($.activity-type = "CLOSE") && ($.path = "%s") }' % path
+    path = f"/{bucket}/{key}"
+    # Plain text terms (not a JSON $.field pattern), so the search matches both JSON
+    # and text Transfer Family logs. Each hit is then checked exactly in either format.
+    pattern = '"CLOSE" "%s"' % path.replace('"', '\\"')
     start_ms = int((datetime.now(timezone.utc).timestamp() - TRANSFER_LOG_LOOKBACK_SECONDS) * 1000)
     for attempt in range(TRANSFER_LOG_ATTEMPTS):
         for group in get_transfer_log_groups():
@@ -619,7 +617,11 @@ def find_transfer_family_user(bucket, key):
             for _ in range(10):
                 resp = logs.filter_log_events(**kwargs)
                 for event in resp.get("events", []):
-                    user = transfer_user_from_stream(event.get("logStreamName"))
+                    message = event.get("message")
+                    if not is_close_line_for_path(message, path):
+                        continue
+                    user = (transfer_user_from_stream(event.get("logStreamName"))
+                            or transfer_user_from_text_line(message))
                     if user:
                         return user
                 if not resp.get("nextToken"):
@@ -650,6 +652,106 @@ def publish_transfer_family_file_in(bucket, key, partner_id):
         extra_dimensions=[{"Name": "TransferUser", "Value": user}]
     )
     return user
+    # ---TRANSFER FAMILY LOGIN FAILURES PER PARTNER (Lambda invoked by a CloudWatch Logs
+    # subscription filter on AUTH_FAILURE lines of the Transfer Family log group)---
+    # A failed login has only the user name. The user's bucket comes from that user's last
+    # successful login (CONNECTED line, home-dir / HomeDir), and the bucket gives the partner.
+    # Works for both log formats:
+    #   JSON: {"activity-type":"AUTH_FAILURE","user":"Oracle",...}
+    #         {"activity-type":"CONNECTED","user":"Oracle","home-dir":"/<bucket>",...}
+    #   text: ERRORS AUTH_FAILURE Method=publickey User=Oracle ...
+    #         Oracle.<session-id> CONNECTED SourceIP=... User=Oracle HomeDir=/<bucket> ...
+TRANSFER_HOME_LOOKBACK_SECONDS = 30 * 24 * 3600
+_transfer_user_buckets = {}
+def parse_transfer_log_line(message):
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        return record.get("activity-type"), record.get("user"), record.get("home-dir")
+    words = text.split()
+    activity = next((w for w in words[:3] if w in ("AUTH_FAILURE", "CONNECTED")), None)
+    user = re.search(r"(?:^|\s)User=(\S+)", text)
+    home = re.search(r"(?:^|\s)HomeDir=(\S+)", text)
+    return activity, user.group(1).strip('"') if user else None, home.group(1).strip('"') if home else None
+TRANSFER_HOME_SEARCH_WINDOWS = (3600, 24 * 3600, TRANSFER_HOME_LOOKBACK_SECONDS)
+TRANSFER_HOME_SEARCH_MAX_SECONDS = 20
+def find_transfer_user_bucket(log_group, user):
+    if user in _transfer_user_buckets:
+        return _transfer_user_buckets[user]
+    pattern = '"CONNECTED" "%s"' % user.replace('"', '\\"')
+    deadline = time.time() + TRANSFER_HOME_SEARCH_MAX_SECONDS
+    now_s = datetime.now(timezone.utc).timestamp()
+    # Newest logins first: last hour, then last day, then the full lookback.
+    for window in TRANSFER_HOME_SEARCH_WINDOWS:
+        kwargs = {
+            "logGroupName": log_group,
+            "startTime": int((now_s - window) * 1000),
+            "filterPattern": pattern,
+        }
+        bucket = None
+        while time.time() < deadline:
+            resp = logs.filter_log_events(**kwargs)
+            for event in resp.get("events", []):
+                activity, line_user, home_dir = parse_transfer_log_line(event.get("message"))
+                if activity == "CONNECTED" and line_user == user and home_dir:
+                    parts = [x for x in home_dir.split("/") if x]
+                    if parts:
+                        bucket = parts[0]
+            if not resp.get("nextToken"):
+                break
+            kwargs["nextToken"] = resp["nextToken"]
+        if bucket:
+            _transfer_user_buckets[user] = bucket
+            return bucket
+        if time.time() >= deadline:
+            break
+    return None
+def handle_transfer_login_failures(event):
+    payload = json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
+    if payload.get("messageType") != "DATA_MESSAGE":
+        return {"statusCode": 200, "body": "Control message ignored."}
+    log_group = payload.get("logGroup")
+    counted = 0
+    for log_event in payload.get("logEvents", []):
+        activity, user, _ = parse_transfer_log_line(log_event.get("message"))
+        if activity != "AUTH_FAILURE":
+            continue
+        user = user or "Unknown"
+        partner_id = None
+        bucket = None
+        try:
+            if user != "Unknown":
+                bucket = find_transfer_user_bucket(log_group, user)
+            if bucket:
+                get_partner_name_for_bucket(bucket)
+                partner_id = _bucket_partner_ids.get(bucket)
+        except Exception as e:
+            logger.warning("Could not find the partner for Transfer Family user %s: %s", user, e)
+        if partner_id is None:
+            if user == "Unknown":
+                reason = "no user name in the AUTH_FAILURE line"
+            elif not bucket:
+                reason = "no earlier successful login (CONNECTED with home folder) found in %s" % log_group
+            else:
+                reason = "bucket %s is not registered in partner_registry" % bucket
+            logger.warning(
+                "Login failure for Transfer Family user %s could not be matched to a partner: %s. "
+                "Counted under All only.", user, reason
+            )
+        else:
+            logger.info(
+                "Login failure | Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s",
+                user, _bucket_partner_names.get(bucket), partner_id, bucket
+            )
+        put_partner_metric(
+            "HIE/OperationalMonitoring", "PartnerLoginFailures", partner_id, 1,
+            extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+        )
+        counted += 1
+    return {"statusCode": 200, "body": f"Login failures counted: {counted}"}
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -657,29 +759,31 @@ def get_registered_partner_count():
     cached_at = _registered_partner_count["at"]
     if cached_at and (now - cached_at).total_seconds() < 900:
         return _registered_partner_count["value"]
+    conn = None
     try:
-        conn = get_shared_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             execute_crud(cur, "SELECT COUNT(*) FROM partner_registry")
             row = cur.fetchone()
         _registered_partner_count["value"] = row[0] if row else None
         _registered_partner_count["at"] = now
-    except DatabaseConnectionError:
-        raise
     except Exception as e:
-        rollback_shared_conn()
         logger.warning("Could not count registered partners: %s", e)
+    finally:
+        if conn:
+            conn.close()
     return _registered_partner_count["value"]
     # ---KEEP THE DASHBOARD PARTNER DROPDOWN IN SYNC WITH THE DATABASE (checked at most every 15 min)---
-def update_partner_dropdown():
+def update_partner_dropdown(event=None, context=None):
     if not DASHBOARD_NAME:
         return
     now = datetime.now(timezone.utc)
     checked_at = _dropdown_checked["at"]
     if checked_at and (now - checked_at).total_seconds() < 900:
         return
+    conn = None
     try:
-        conn = get_shared_conn()
+        conn = get_conn(publish_failure_metric=False)
         with conn.cursor() as cur:
             execute_crud(
                 cur,
@@ -708,26 +812,110 @@ def update_partner_dropdown():
             cloudwatch.put_dashboard(DashboardName=DASHBOARD_NAME, DashboardBody=json.dumps(body))
             logger.info("Partner dropdown updated with %d partner(s).", len(partners))
         _dropdown_checked["at"] = now
-    except Exception as e:
-        rollback_shared_conn()
+    except DatabaseConnectionError as e:
         logger.warning("Could not update partner dropdown: %s", e)
-    # --- PARTNER TRANSMISSION STATE TRACKING ---
-def update_partner_state(cur, partner_id, object_key, partner_name=None):
+        invoke_retry_handler(e, event)
+        try:
+            route_critical_failure_notification(e, context)
+        except Exception as alert_error:
+            logger.error("Failed to send failure alert: %s", alert_error)
+    except Exception as e:
+        logger.warning("Could not update partner dropdown: %s", e)
+    finally:
+        if conn:
+            conn.close()
+    # ---EXPECTED FILES PER PARTNER (dashboard Files In "Expected", read from partner_schedule)---
+    # Each partner's schedule (expected_files_per_transmission every expected_interval_seconds)
+    # is turned into "expected files per 30 minutes" and published per PartnerId and as "All".
+    # e.g. 6 files every 1800s -> 6, 6 files every 3600s -> 3. The dashboard multiplies this
+    # by the selected time range. Published at most every 5 minutes.
+EXPECTED_FILES_WINDOW_SECONDS = 1800
+_expected_files_published = {"at": None}
+def publish_partner_expected_files():
     now = datetime.now(timezone.utc)
+    published_at = _expected_files_published["at"]
+    if published_at and (now - published_at).total_seconds() < 300:
+        return
+    conn = None
+    try:
+        conn = get_conn(publish_failure_metric=False)
+        with conn.cursor() as cur:
+            execute_crud(
+                cur,
+                """
+                SELECT DISTINCT ON (s.partner_id)
+                       s.partner_id,
+                       s.expected_files_per_transmission,
+                       s.expected_interval_seconds
+                FROM partner_schedule s
+                JOIN partner_registry r ON r.partner_id = s.partner_id
+                WHERE s.expected_interval_seconds > 0
+                  AND s.expected_files_per_transmission > 0
+                ORDER BY s.partner_id
+                """
+            )
+            rows = cur.fetchall()
+        total_expected = 0
+        for partner_id, files_per_transmission, interval_seconds in rows:
+            expected = files_per_transmission * EXPECTED_FILES_WINDOW_SECONDS / interval_seconds
+            total_expected += expected
+            put_metric(
+                namespace="HIE/PartnerMonitoring",
+                metric_name="PartnerExpectedFiles",
+                value=expected,
+                dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
+            )
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerExpectedFiles",
+            value=total_expected,
+            dimensions=[{"Name": "PartnerId", "Value": "All"}]
+        )
+        _expected_files_published["at"] = now
+        logger.info("Published expected files per 30 min for %d partner(s), All=%s", len(rows), total_expected)
+    except Exception as e:
+        logger.warning("Could not publish expected files per partner: %s", e)
+    finally:
+        if conn:
+            conn.close()
+    # --- PARTNER TRANSMISSION STATE TRACKING ---
+def update_partner_state(cur, partner_id, object_key, payload_arrived_at, partner_name=None):
+    now = datetime.now(timezone.utc)
+    # ---S3 ARRIVAL TIME (not Lambda run time) DRIVES last_seen_at AND THE SLA GAP---
+    if isinstance(payload_arrived_at, str):
+        arrived_at = datetime.fromisoformat(payload_arrived_at.replace("Z", "+00:00"))
+    else:
+        arrived_at = payload_arrived_at or now
+    if arrived_at.tzinfo is None:
+        arrived_at = arrived_at.replace(tzinfo=timezone.utc)
     filename = os.path.basename(object_key)
     batch_id = extract_batch_id(filename)
     batch_prefix = f"{batch_id}_"
     clean_filename = filename[len(batch_prefix):] if filename.startswith(batch_prefix) else filename
+    # ---LOCK THE PARTNER ROW SO CONCURRENT LAMBDA RUNS CANNOT RACE---
     execute_crud(
         cur,
         """
         SELECT last_seen_at
         FROM partner_transmission_state
         WHERE partner_id = %s
+        FOR UPDATE
         """,
         (partner_id,),
     )
     existing_row = cur.fetchone()
+    previous_last_seen_at = None
+    if existing_row and existing_row[0]:
+        previous_last_seen_at = existing_row[0]
+        if previous_last_seen_at.tzinfo is None:
+            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
+        # ---STALE: DUPLICATE OR OUT-OF-ORDER FILE, DO NOT MOVE STATE BACKWARDS---
+        if arrived_at <= previous_last_seen_at:
+            logger.info(
+                "STALE | partner_id=%s | file=%s | arrived_at=%s <= last_seen_at=%s | state not updated",
+                partner_id, clean_filename, arrived_at.isoformat(), previous_last_seen_at.isoformat()
+            )
+            return "STALE"
     if existing_row:
         execute_crud(
             cur,
@@ -739,7 +927,7 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
                 updated_at = %s
             WHERE partner_id = %s
             """,
-            (now, batch_id, clean_filename, now, partner_id),
+            (arrived_at, batch_id, clean_filename, now, partner_id),
         )
     else:
         execute_crud(
@@ -754,7 +942,7 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
             )
             VALUES (%s,%s,%s,%s,%s)
             """,
-            (partner_id, now, batch_id, clean_filename, now),
+            (partner_id, arrived_at, batch_id, clean_filename, now),
         )
     put_metric(
         namespace="HIE/PartnerMonitoring",
@@ -763,25 +951,45 @@ def update_partner_state(cur, partner_id, object_key, partner_name=None):
         unit="Count",
         dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
     )
-    if existing_row and existing_row[0]:
-        previous_last_seen_at = existing_row[0]
-        if previous_last_seen_at.tzinfo is None:
-            previous_last_seen_at = previous_last_seen_at.replace(tzinfo=timezone.utc)
-        gap_seconds = (now - previous_last_seen_at).total_seconds()
-        execute_crud(
-            cur,
-            """
-            SELECT expected_interval_seconds
-            FROM partner_schedule
-            WHERE partner_id = %s
-            """,
-            (partner_id,),
+    # ---FIRST FILE FOR THIS PARTNER: NO EARLIER ARRIVAL, SO NO GAP TO CLASSIFY---
+    if previous_last_seen_at is None:
+        logger.info("Partner %s | first recorded arrival, no gap to classify", partner_id)
+        return "ON_TIME"
+    gap_seconds = (arrived_at - previous_last_seen_at).total_seconds()
+    # ---READ CONFIGURED SLA---
+    execute_crud(
+        cur,
+        """
+        SELECT expected_interval_seconds
+        FROM partner_schedule
+        WHERE partner_id = %s
+        """,
+        (partner_id,),
+    )
+    schedule_row = cur.fetchone()
+    expected_interval_seconds = schedule_row[0] if schedule_row else None
+    if expected_interval_seconds is None:
+        raise ValueError(f"No SLA (expected_interval_seconds) configured for partner_id={partner_id}")
+    try:
+        expected_interval_seconds = float(expected_interval_seconds)
+    except (TypeError, ValueError):
+        raise ValueError(
+            f"Invalid SLA (expected_interval_seconds={expected_interval_seconds!r}) for partner_id={partner_id}"
         )
-        schedule_row = cur.fetchone()
-        expected_interval_seconds = schedule_row[0] if schedule_row else None
-        if expected_interval_seconds and gap_seconds > expected_interval_seconds * 1.5:
-            # ---STALE CONNECTION PER PARTNER ID + "All"---
-            put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
+    if expected_interval_seconds <= 0:
+        raise ValueError(
+            f"Invalid SLA (expected_interval_seconds={expected_interval_seconds}) for partner_id={partner_id}"
+        )
+    # ---GAP CLASSIFICATION---
+    gap_classification = "BREACH" if gap_seconds > expected_interval_seconds else "ON_TIME"
+    logger.info(
+        "Partner %s | gap=%.0fs | sla=%.0fs | %s",
+        partner_id, gap_seconds, expected_interval_seconds, gap_classification
+    )
+    if gap_seconds > expected_interval_seconds * 1.5:
+        # ---STALE CONNECTION PER PARTNER ID + "All"---
+        put_partner_metric("HIE/PartnerMonitoring", "StaleConnection", partner_id, 1)
+    return gap_classification
     # --- BREACH AND RECOVERY STATE MANAGEMENT ---
 def clear_breach_flag(cur, partner_id):
     execute_crud(
@@ -879,11 +1087,6 @@ def send_recovery_sns(partner_name, partner_id, environment):
         logger.exception(
             "SNS notification failed for partner_id=%s, but database changes were already committed.",
             partner_id,
-        )
-        put_metric(
-            namespace="HIE/OperationalMonitoring",
-            metric_name="SNSPublishFailures",
-            value=1
         )
     # ---FILE VALIDATION AND COUNTING---
 def read_manifest_expected_counts(bucket, key):
@@ -1014,6 +1217,7 @@ def extract_disclosure_report_rows(bucket, key):
             "document_id": parts[15],
             "ccda_file": parts[16],
             "commonwell_indicator": parts[17],
+            "ohin_indicator": (parts[18].strip() or None) if len(parts) > 18 else None,
         })
     return rows
     # ---SQS MESSAGE BUILDERS---
@@ -1022,6 +1226,15 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
     zip_actual_count = count_zip(bucket, zip_meta["key"])
     zip_expected_count = manifest_expected_counts.get("CCDA", 0)
     zip_matches_manifest = zip_actual_count == zip_expected_count
+    # Negative = fewer files than the manifest says (e.g. manifest 10, actual 7 -> -3)
+    zip_count_discrepancy = zip_actual_count - zip_expected_count
+    logger.info(
+        "Batch %s | zip count check | manifest_expected=%d | actual=%d | count_discrepancy=%d",
+        batch_id,
+        zip_expected_count,
+        zip_actual_count,
+        zip_count_discrepancy,
+    )
     file_metadata = {
         "manifest": manifest_meta,
         "zip": zip_meta,
@@ -1053,7 +1266,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
             "manifest_expected_count": zip_expected_count,
             "zip_actual_count": zip_actual_count,
             "zip_matches_manifest": zip_matches_manifest,
-            "count_discrepancy": abs(zip_actual_count - zip_expected_count)
+            "count_discrepancy": zip_count_discrepancy
         },
         "status": {
             "validation_status": validation_status,
@@ -1078,6 +1291,15 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         patient_report_rows = extract_disclosure_report_rows(bucket, report_key)
     report_expected_count = manifest_expected_counts.get("REPORT", 0)
     report_matches_manifest = report_actual_count == report_expected_count
+    # Negative = fewer rows than the manifest says (e.g. manifest 10, actual 7 -> -3)
+    report_count_discrepancy = report_actual_count - report_expected_count
+    logger.info(
+        "Batch %s | report count check | manifest_expected=%d | actual=%d | count_discrepancy=%d",
+        batch_id,
+        report_expected_count,
+        report_actual_count,
+        report_count_discrepancy,
+    )
     file_metadata = {
         "report": report_meta,
     }
@@ -1101,14 +1323,14 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": INGESTION_METHOD,
-        "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
+        "direction": "outbound" if batch_type == "RECEIVED" else "inbound",
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
             "manifest_expected_count": report_expected_count,
             "report_actual_count": report_actual_count,
             "report_matches_manifest": report_matches_manifest,
-            "count_discrepancy": abs(report_actual_count - report_expected_count)
+            "count_discrepancy": report_count_discrepancy
         },
         "status": {
             "validation_status": validation_status,
@@ -1134,16 +1356,27 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
     partner_id = partner_batch_key = environment = partner_name = None
     breach_cleared = False
     not_in_breach_count = None
+    on_time_transmission = None
     reset_crud_tracking()
     try:
-        conn = get_shared_conn()
+        conn = get_conn()
         with conn.cursor() as cur:
             partner_id, partner_batch_key, environment = get_partner_info(cur, bucket)
             partner_name = get_partner_name(cur, partner_id)
             candidates = [m for m in (manifest_meta, report_meta, zip_meta) if m.get("last_modified_utc")]
             latest_meta = max(candidates, key=lambda m: datetime.fromisoformat(m["last_modified_utc"])) if candidates else manifest_meta
-            update_partner_state(cur, partner_id, latest_meta["key"], partner_name)
-            breach_cleared = clear_breach_flag(cur, partner_id)
+            on_time_transmission = update_partner_state(
+                cur, partner_id, latest_meta["key"], latest_meta["last_modified_utc"], partner_name
+            )
+            logger.info("Batch %s | partner_id=%s | gap classification=%s", batch_id, partner_id, on_time_transmission)
+            # ---ONLY CLEAR THE BREACH FLAG FOR A NEW ARRIVAL, NOT A DUPLICATE/OUT-OF-ORDER (STALE) FILE---
+            if on_time_transmission != "STALE":
+                breach_cleared = clear_breach_flag(cur, partner_id)
+            else:
+                logger.info(
+                    "Batch %s | partner_id=%s | STALE file, breach flag left unchanged",
+                    batch_id, partner_id
+                )
         conn.commit()
         # ---COUNT OF REGISTERED PARTNERS NOT IN BREACH (dashboard "All" value)---
         try:
@@ -1159,7 +1392,6 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
                 row = cur.fetchone()
                 not_in_breach_count = row[0] if row else None
         except Exception as count_error:
-            rollback_shared_conn()
             logger.warning("Could not count partners not in breach: %s", count_error)
             if isinstance(count_error, psycopg2.Error):
                 put_failure_metric("CRUDFailureEvents", "Read", partner_id)
@@ -1191,10 +1423,53 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
             bucket,
             batch_id
         )
+        if not isinstance(e, DatabaseConnectionError):
+            _publish_operational_alert(
+                subject=f"CRITICAL: Manifest processing failed for batch {batch_id}",
+                message=(
+                    f"CRITICAL: Manifest processing failed for batch '{batch_id}'.\n"
+                    f"Failure category: General Processing Failure\n"
+                    f"Environment: {os.environ.get('ENVIRONMENT', 'Unknown')}\n"
+                    f"AWS Region: {AWS_REGION}\n"
+                    f"Bucket: {bucket}\n"
+                    f"Partner: {partner_name or 'Unknown'}\n"
+                    f"CRUD operation: {crud_failure_type}\n"
+                    f"Error type: {type(e).__name__}\n"
+                    f"Error message: {str(e)}\n"
+                ),
+                failure_category="General Processing Failure",
+            )
         raise
+    finally:
+        if conn:
+            conn.close()
+    # ---POST-COMMIT TRANSMISSION STATUS (skipped for STALE duplicate/out-of-order files)---
+    if on_time_transmission != "STALE":
+        logger.info(
+            "TransmissionStatus | partner_id=%s | partner_name=%s | batch_id=%s | status=%s",
+            partner_id, partner_name, batch_id, on_time_transmission
+        )
+        # ---ON-TIME / DELAYED TRANSMISSIONS PER PARTNER ID + "All"---
+        if on_time_transmission == "BREACH":
+            put_partner_metric("HIE/PartnerMonitoring", "DelayedTransmissions", partner_id, 1)
+        else:
+            put_partner_metric("HIE/PartnerMonitoring", "OnTimeTransmissions", partner_id, 1)
     if breach_cleared:
+        logger.info(
+            "PartnerRecovery | partner_id=%s | partner_name=%s | batch_id=%s | breach cleared, recovery notification sent",
+            partner_id, partner_name, batch_id
+        )
         send_recovery_sns(partner_name, partner_id, environment)
     put_partner_metric("HIE/PartnerMonitoring", "PartnerRecovered", partner_id, 1 if breach_cleared else 0)
+    # ---PARTNER RECOVERED PER PARTNER NAME---
+    if on_time_transmission != "STALE" and partner_name:
+        put_metric(
+            namespace="HIE/PartnerMonitoring",
+            metric_name="PartnerRecovered",
+            value=1 if breach_cleared else 0,
+            unit="Count",
+            dimensions=[{"Name": "PartnerName", "Value": str(partner_name)}]
+        )
     # ---PARTNER NOT IN BREACH (batch processed successfully, breach flag cleared)---
     # Sent per PartnerId and as "All" (value = number of registered partners not in breach).
     all_not_in_breach = not_in_breach_count if not_in_breach_count is not None else 1
@@ -1240,7 +1515,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     logger.info(
         "Batch %s | type=%s | availability: manifest=%s report=%s zip=%s",
         batch_id,
-        batch_type,
+        batch_type_label(batch_type),
         bool(manifest_key),
         bool(report_key),
         bool(zip_key)
@@ -1256,12 +1531,12 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         logger.info(
             "Batch %s | type=%s is not ready yet. Missing files: %s",
             batch_id,
-            batch_type,
+            batch_type_label(batch_type),
             ", ".join(missing_files)
         )
         return None
     if is_batch_already_sent(bucket, manifest_key):
-        logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type)
+        logger.info("Batch %s | type=%s already sent to SQS, skipping duplicate.", batch_id, batch_type_label(batch_type))
         return None
     log_batch_received_and_bucket_total(bucket, batch_id, batch_type, manifest_key, report_key, zip_key)
     manifest_meta = get_object_metadata(bucket, manifest_key)
@@ -1271,7 +1546,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     logger.info(
         "Batch %s | type=%s | Manifest expected counts | CCDA=%d | REPORT=%d",
         batch_id,
-        batch_type,
+        batch_type_label(batch_type),
         manifest_expected_counts.get("CCDA", 0),
         manifest_expected_counts.get("REPORT", 0),
     )
@@ -1479,7 +1754,9 @@ def process_object(bucket, key, record):
     # ---MAIN LAMBDA HANDLER---
 def lambda_handler(event, context):
     logger.info("Main Lambda handler.")
-    close_shared_conn()
+    # ---TRANSFER FAMILY LOGIN FAILURES (from the CloudWatch Logs subscription filter)---
+    if "awslogs" in event:
+        return handle_transfer_login_failures(event)
     invocation_start = datetime.now(timezone.utc)
     records = event.get("Records", [])
     if not records:
@@ -1528,14 +1805,17 @@ def lambda_handler(event, context):
             )
             if not invoke_retry_handler(e, event):
                 retry_handler_failed = True
-            route_critical_failure_notification(e, context)
+            try:
+                route_critical_failure_notification(e, context)
+            except Exception as alert_error:
+                logger.error("Failed to send failure alert: %s", alert_error)
             results.append({
                 "processed": False,
                 "reason": "PROCESSING_ERROR",
                 "error": error_message
             })
-    update_partner_dropdown()
-    close_shared_conn()
+    update_partner_dropdown(event, context)
+    publish_partner_expected_files()
     put_metric(
         namespace="HIE/OperationalMonitoring",
         metric_name="Latency",
