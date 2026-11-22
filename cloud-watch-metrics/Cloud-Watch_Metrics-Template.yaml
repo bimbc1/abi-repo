@@ -68,7 +68,7 @@ Resources:
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: Lambda-DatabaseConnectionFailures
+      AlarmName: !Sub Lambda-DatabaseConnectionFailures-${Env}
       AlarmDescription: Fires when any Lambda (Manifest Metadata, Database Processor,
         CCDA Extraction or Payload Monitoring) fails to connect to the database.
         Check the Failed Database Connections gauges on the dashboard to see which one.
@@ -164,7 +164,7 @@ Resources:
   MetadataLambdaFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-LambdaFailures
+      AlarmName: !Sub ManifestMetadata-LambdaFailures-${Env}
       AlarmDescription: Fires when the Manifest Metadata Lambda fails while processing a record.
       Namespace: HIE/OperationalMonitoring
       MetricName: MetadataLambdaFailures
@@ -186,7 +186,7 @@ Resources:
   ServiceAvailabilityAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-ServiceAvailability
+      AlarmName: !Sub ManifestMetadata-ServiceAvailability-${Env}
       AlarmDescription: Fires when the Manifest Metadata Lambda reports itself
         unavailable (retry handler also failed). Periods with no invocations are
         treated as OK, not as an outage.
@@ -213,7 +213,7 @@ Resources:
   CountMismatchEventsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-CountMismatchEvents
+      AlarmName: !Sub ManifestMetadata-CountMismatchEvents-${Env}
       AlarmDescription: Fires when a batch's actual file/row count does not match its manifest.
       Namespace: HIE/OperationalMonitoring
       MetricName: CountMismatchEvents
@@ -230,7 +230,7 @@ Resources:
   RetryHandlerInvocationFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-RetryHandlerFailures
+      AlarmName: !Sub ManifestMetadata-RetryHandlerFailures-${Env}
       AlarmDescription: Fires when the retry_utils handler itself fails to run -- no
         retry is guaranteed for the underlying error.
       Namespace: HIE/OperationalMonitoring
@@ -248,7 +248,7 @@ Resources:
   ProcessingDelayAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-ProcessingDelay
+      AlarmName: !Sub ManifestMetadata-ProcessingDelay-${Env}
       AlarmDescription: Fires when a file takes 15 minutes (900 seconds) or longer to process.
       Namespace: HIE/OperationalMonitoring
       MetricName: ProcessingDelaySeconds
@@ -265,7 +265,7 @@ Resources:
   TablesGeneratorErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: TablesGenerator-LambdaErrors
+      AlarmName: !Sub TablesGenerator-LambdaErrors-${Env}
       AlarmDescription: Fires when the Tables Generator Lambda returns an error.
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -290,7 +290,7 @@ Resources:
   DatabaseProcessorErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: DatabaseProcessor-LambdaErrors
+      AlarmName: !Sub DatabaseProcessor-LambdaErrors-${Env}
       AlarmDescription: Fires when the Database Processor Lambda returns an error.
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -315,7 +315,7 @@ Resources:
   CCDAExtractionErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: CCDAExtraction-LambdaErrors
+      AlarmName: !Sub CCDAExtraction-LambdaErrors-${Env}
       AlarmDescription: Fires when the CCDA Extraction Lambda returns an error.
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -340,7 +340,7 @@ Resources:
   PayloadMonitoringErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: PayloadMonitoring-LambdaErrors
+      AlarmName: !Sub PayloadMonitoring-LambdaErrors-${Env}
       AlarmDescription: Fires when the Payload Monitoring Lambda returns an error.
       Namespace: AWS/Lambda
       MetricName: Errors
@@ -365,7 +365,7 @@ Resources:
   RDSAvailabilityAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: RDS-CPUUtilization
+      AlarmName: !Sub RDS-CPUUtilization-${Env}
       AlarmDescription: Fires when the RDS database CPU is 80% or higher, or when
         the database stops reporting metrics (database down).
       Namespace: AWS/RDS
@@ -386,7 +386,7 @@ Resources:
   DatabaseProcessorDLQAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: DatabaseProcessor-DLQMessages
+      AlarmName: !Sub DatabaseProcessor-DLQMessages-${Env}
       AlarmDescription: Fires when a message lands in the Database Processor dead-letter queue.
       Namespace: AWS/SQS
       MetricName: ApproximateNumberOfMessagesVisible
@@ -407,7 +407,7 @@ Resources:
   TransferFamilyUploadFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: TransferFamily-UploadFailures
+      AlarmName: !Sub TransferFamily-UploadFailures-${Env}
       AlarmDescription: Fires when a file upload to the Transfer Family server fails (PARTIAL_CLOSE).
       Namespace: HIE/OperationalMonitoring
       MetricName: UploadFailures
@@ -424,7 +424,7 @@ Resources:
   MetadataProcessingQueueAgeAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: MetadataProcessingQueue-OldestMessageAge
+      AlarmName: !Sub MetadataProcessingQueue-OldestMessageAge-${Env}
       AlarmDescription: Fires when the oldest message in the metadata processing queue has waited 15 minutes (900 seconds) or longer.
       Namespace: AWS/SQS
       MetricName: ApproximateAgeOfOldestMessage
@@ -444,7 +444,7 @@ Resources:
   RDSDatabaseConnectionsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: RDS-DatabaseConnections
+      AlarmName: !Sub RDS-DatabaseConnections-${Env}
       AlarmDescription: Fires when the RDS database has 80 or more open connections.
       Namespace: AWS/RDS
       MetricName: DatabaseConnections
@@ -464,7 +464,7 @@ Resources:
   RDSFreeStorageSpaceAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: RDS-FreeStorageSpace
+      AlarmName: !Sub RDS-FreeStorageSpace-${Env}
       AlarmDescription: Fires when the RDS database has less than 2 GB of free storage space.
       Namespace: AWS/RDS
       MetricName: FreeStorageSpace
@@ -484,7 +484,7 @@ Resources:
   RDSFreeableMemoryAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: RDS-FreeableMemory
+      AlarmName: !Sub RDS-FreeableMemory-${Env}
       AlarmDescription: Fires when the RDS database has less than 256 MB of freeable memory.
       Namespace: AWS/RDS
       MetricName: FreeableMemory
@@ -504,7 +504,7 @@ Resources:
   SNSPublishFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-SNSPublishFailures
+      AlarmName: !Sub ManifestMetadata-SNSPublishFailures-${Env}
       AlarmDescription: Fires when the Manifest Metadata Lambda fails to send an alert or recovery email through SNS.
       Namespace: HIE/OperationalMonitoring
       MetricName: SNSPublishFailures
@@ -608,24 +608,24 @@ Resources:
                 "properties": {
                   "title": "Operational Monitoring Status",
                   "alarms": [
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Lambda-DatabaseConnectionFailures",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-LambdaFailures",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ProcessingDelay",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TablesGenerator-LambdaErrors",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-LambdaErrors",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:CCDAExtraction-LambdaErrors",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:PayloadMonitoring-LambdaErrors",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-CPUUtilization",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TransferFamily-UploadFailures",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MetadataProcessingQueue-OldestMessageAge",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-DatabaseConnections",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures"
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Lambda-DatabaseConnectionFailures-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-LambdaFailures-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-RetryHandlerFailures-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ProcessingDelay-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TablesGenerator-LambdaErrors-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-LambdaErrors-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:CCDAExtraction-LambdaErrors-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:PayloadMonitoring-LambdaErrors-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-CPUUtilization-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-DLQMessages-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:TransferFamily-UploadFailures-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:MetadataProcessingQueue-OldestMessageAge-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-DatabaseConnections-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures-${Env}"
                   ]
                 }
               },
