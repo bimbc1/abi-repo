@@ -14,7 +14,14 @@ Parameters:
     Description: ID of the existing AWS Transfer Family server.
   PartnerIds:
     Type: CommaDelimitedList
-    Description: Partners dropdown
+    Description: >-
+      Partner IDs shown in the dashboard's Partner dropdown (comma-separated,
+      e.g. "acme,globex"). Each must equal the PartnerId dimension value the
+      Lambdas publish. "All" in the dropdown means all partners in this list.
+      This is the ONLY source of the dropdown values: CloudFormation rewrites
+      the whole DashboardBody on every stack update, so partners added by
+      editing the dashboard in the console are lost. To add or remove a
+      partner, change this parameter and update the stack.
 
 Conditions:
   IsGovCloud: !Equals
@@ -25,15 +32,98 @@ Conditions:
 Resources:
 
 
+  # Same metric the "Failed Database Connections" gauges show: each Lambda
+  # (all except Tables Generator) publishes RetryEvents with its FunctionName
+  # and FailureType=DatabaseConnectionFailure. The alarm adds the four up and
+  # fires if any of them reports a failure; the gauges show which Lambda it was.
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: ManifestMetadata-DatabaseConnectionFailures
-      AlarmDescription: Fires when the Manifest Metadata Lambda fails to connect to the database.
-      Namespace: HIE/OperationalMonitoring
-      MetricName: DatabaseConnectionFailures
-      Statistic: Sum
-      Period: 300
+      AlarmName: Lambda-DatabaseConnectionFailures
+      AlarmDescription: Fires when any Lambda (Manifest Metadata, Database Processor,
+        CCDA Extraction or Payload Monitoring) fails to connect to the database.
+        Check the Failed Database Connections gauges on the dashboard to see which one.
+      Metrics:
+        - Id: mm
+          Label: Manifest Metadata Lambda
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 300
+            Metric:
+              Namespace: HIE/OperationalMonitoring
+              MetricName: RetryEvents
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+                - Name: FailureType
+                  Value: DatabaseConnectionFailure
+        - Id: dp
+          Label: Database Processor Lambda
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 300
+            Metric:
+              Namespace: HIE/OperationalMonitoring
+              MetricName: RetryEvents
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+                - Name: FailureType
+                  Value: DatabaseConnectionFailure
+        - Id: cc
+          Label: CCDA Extraction Lambda
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 300
+            Metric:
+              Namespace: HIE/OperationalMonitoring
+              MetricName: RetryEvents
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-ccda-extraction-arn-${Env}
+                - Name: FailureType
+                  Value: DatabaseConnectionFailure
+        - Id: pm
+          Label: Payload Monitoring Lambda
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 300
+            Metric:
+              Namespace: HIE/OperationalMonitoring
+              MetricName: RetryEvents
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+                - Name: FailureType
+                  Value: DatabaseConnectionFailure
+        - Id: total
+          Label: Database connection failures (all Lambdas)
+          Expression: SUM([FILL(mm, 0), FILL(dp, 0), FILL(cc, 0), FILL(pm, 0)])
+          ReturnData: true
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: GreaterThanOrEqualToThreshold
@@ -553,7 +643,7 @@ Resources:
                 "properties": {
                   "title": "Operational Monitoring Status",
                   "alarms": [
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-DatabaseConnectionFailures",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:Lambda-DatabaseConnectionFailures",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-LambdaFailures",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-ServiceAvailability",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-CountMismatchEvents",
