@@ -12,6 +12,16 @@ Parameters:
     Type: String
     Default: s-4603e09e711e4cfa8
     Description: ID of the existing AWS Transfer Family server.
+  PartnerIds:
+    Type: CommaDelimitedList
+    Description: >-
+      Partner IDs shown in the dashboard's Partner dropdown (comma-separated,
+      e.g. "acme,globex"). Each must equal the PartnerId dimension value the
+      Lambdas publish. "All" in the dropdown means all partners in this list.
+      This is the ONLY source of the dropdown values: CloudFormation rewrites
+      the whole DashboardBody on every stack update, so partners added by
+      editing the dashboard in the console are lost. To add or remove a
+      partner, change this parameter and update the stack.
 
 Conditions:
   IsGovCloud: !Equals
@@ -510,11 +520,14 @@ Resources:
                 "visible": true,
                 "values": [
                   {
-                    "value": "All",
+                    "value": "${AllPartnersValue}",
                     "label": "All"
+                  },
+                  {
+                    "value": "${PartnerDropdownValues}"
                   }
                 ],
-                "defaultValue": "All"
+                "defaultValue": "${AllPartnersValue}"
               }
             ],
             "widgets": [
@@ -596,7 +609,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerTransferFilesIn\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerTransferFilesIn\" (PartnerId=\"__PARTNER__\")', 'Sum')",
                         "id": "tu",
                         "visible": false
                       }
@@ -610,7 +623,7 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"PartnerExpectedFiles\" PartnerId=\"__PARTNER__\"', 'Maximum')",
+                        "expression": "SEARCH('{HIE/PartnerMonitoring,PartnerId} MetricName=\"PartnerExpectedFiles\" (PartnerId=\"__PARTNER__\")', 'Maximum')",
                         "id": "ex",
                         "visible": false
                       }
@@ -710,7 +723,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" (PartnerId=\"__PARTNER__\")', 'Sum')",
                         "id": "u1",
                         "visible": false
                       }
@@ -742,7 +755,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerLoginFailures\" (PartnerId=\"__PARTNER__\")', 'Sum')",
                         "id": "b1",
                         "label": "${!PROP('Dim.TransferUser')}"
                       }
@@ -802,57 +815,61 @@ Resources:
                   },
                   "metrics": [
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "Create",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${ManifestMetadataFunctionName}\" FailureType=\"Create\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "mmcs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(mmcs)",
+                        "id": "mmc",
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "Create",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${DatabaseProcessorFunctionName}\" FailureType=\"Create\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "dpcs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(dpcs)",
+                        "id": "dpc",
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "Create",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${PayloadMonitoringFunctionName}\" FailureType=\"Create\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "pmcs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(pmcs)",
+                        "id": "pmc",
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "Create",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${CCDAExtractionFunctionName}\" FailureType=\"Create\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "cccs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(cccs)",
+                        "id": "ccc",
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
@@ -881,57 +898,61 @@ Resources:
                   },
                   "metrics": [
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "Read",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${ManifestMetadataFunctionName}\" FailureType=\"Read\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "mmrs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(mmrs)",
+                        "id": "mmr",
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "Read",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${DatabaseProcessorFunctionName}\" FailureType=\"Read\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "dprs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(dprs)",
+                        "id": "dpr",
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "Read",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${PayloadMonitoringFunctionName}\" FailureType=\"Read\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "pmrs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(pmrs)",
+                        "id": "pmr",
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "Read",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${CCDAExtractionFunctionName}\" FailureType=\"Read\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "ccrs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(ccrs)",
+                        "id": "ccr",
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
@@ -960,57 +981,61 @@ Resources:
                   },
                   "metrics": [
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${ManifestMetadataFunctionName}",
-                      "FailureType",
-                      "Update",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${ManifestMetadataFunctionName}\" FailureType=\"Update\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "mmus",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(mmus)",
+                        "id": "mmu",
                         "label": "Manifest Metadata Lambda",
                         "color": "#1f77b4"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${DatabaseProcessorFunctionName}",
-                      "FailureType",
-                      "Update",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${DatabaseProcessorFunctionName}\" FailureType=\"Update\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "dpus",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(dpus)",
+                        "id": "dpu",
                         "label": "Database Processor Lambda",
                         "color": "#2ca02c"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${PayloadMonitoringFunctionName}",
-                      "FailureType",
-                      "Update",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${PayloadMonitoringFunctionName}\" FailureType=\"Update\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "pmus",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(pmus)",
+                        "id": "pmu",
                         "label": "Payload Monitoring Lambda",
                         "color": "#9467bd"
                       }
                     ],
                     [
-                      "HIE/OperationalMonitoring",
-                      "CRUDFailureEvents",
-                      "FunctionName",
-                      "${CCDAExtractionFunctionName}",
-                      "FailureType",
-                      "Update",
-                      "PartnerId",
-                      "__PARTNER__",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${CCDAExtractionFunctionName}\" FailureType=\"Update\" (PartnerId=\"__PARTNER__\")', 'Sum')",
+                        "id": "ccus",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(ccus)",
+                        "id": "ccu",
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
@@ -1270,7 +1295,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId} MetricName=\"S3ObjectArrivals\" PartnerId=\"__PARTNER__\"', 'Sum', 300)",
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId} MetricName=\"S3ObjectArrivals\" (PartnerId=\"__PARTNER__\")', 'Sum', 300)",
                         "id": "sa",
                         "visible": false
                       }
@@ -1327,7 +1352,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('Namespace=\"HIE/PartnerMonitoring\" MetricName=\"BreachEvents\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "expression": "SEARCH('Namespace=\"HIE/PartnerMonitoring\" MetricName=\"BreachEvents\" (PartnerId=\"__PARTNER__\")', 'Sum')",
                         "id": "s2",
                         "visible": false
                       }
@@ -1367,7 +1392,7 @@ Resources:
                   "metrics": [
                     [
                       {
-                        "expression": "SEARCH('Namespace=\"HIE/PartnerMonitoring\" MetricName=\"PartnerNotInBreach\" PartnerId=\"__PARTNER__\"', 'Maximum')",
+                        "expression": "SEARCH('Namespace=\"HIE/PartnerMonitoring\" MetricName=\"PartnerNotInBreach\" (PartnerId=\"__PARTNER__\")', 'Maximum')",
                         "id": "s3",
                         "visible": false
                       }
@@ -1430,6 +1455,24 @@ Resources:
 
           DlqName: !ImportValue
             Fn::Sub: project-hie-analytics-database-processor-dlq-name-${Env}
+          # PARTNER DROPDOWN -- built from the PartnerIds parameter (see its
+          # Description). Every partner widget filters with
+          #   (PartnerId="__PARTNER__")
+          # and the dropdown replaces __PARTNER__ with the selected value:
+          #   one partner -> (PartnerId="acme")
+          #   All         -> (PartnerId="acme" OR PartnerId="globex")
+          # A wildcard (PartnerId="*") would not work: SEARCH treats quoted
+          # text as an exact match and does not support wildcards.
+          # Keep the list short enough that each SEARCH stays under the
+          # 1024-character limit (roughly 25-30 partners).
+          AllPartnersValue: !Join
+            - '\" OR PartnerId=\"'
+            - !Ref PartnerIds
+          # {"value":"acme"},{"value":"globex"} -- the first {"value":" and
+          # the last "} come from the dashboard JSON above.
+          PartnerDropdownValues: !Join
+            - '"},{"value":"'
+            - !Ref PartnerIds
           # DATABASE HEALTH BUTTONS -- one list item per database. 
           DatabaseHealthButtons: !Join
             - ' '
