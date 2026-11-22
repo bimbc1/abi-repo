@@ -1,6 +1,28 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: HIE Analytics Operational Monitoring CloudWatch Dashboard and Alarms
 
+# Controls the order and labels of the parameters on the CloudFormation
+# "Create stack" page: Env first, then the Transfer Family server ID.
+Metadata:
+  AWS::CloudFormation::Interface:
+    ParameterGroups:
+      - Label:
+          default: Environment
+        Parameters:
+          - Env
+          - TransferServerId
+      - Label:
+          default: Partners
+        Parameters:
+          - PartnerIds
+    ParameterLabels:
+      Env:
+        default: Environment (dev / stg / prod)
+      TransferServerId:
+        default: Transfer Family server ID for this environment
+      PartnerIds:
+        default: Partner IDs for the dashboard dropdown
+
 Parameters:
   Env:
     Type: String
@@ -8,10 +30,17 @@ Parameters:
       - dev
       - stg
       - prod
+  # No default on purpose: each environment (dev/stg/prod) has its own Transfer
+  # Family server. A default would silently attach the log transformer, metric
+  # filters and subscription filter to another environment's log group.
   TransferServerId:
     Type: String
-    Default: s-4603e09e711e4cfa8
-    Description: ID of the existing AWS Transfer Family server.
+    AllowedPattern: '^s-[0-9a-f]{17}$'
+    ConstraintDescription: Must be a Transfer Family server ID, e.g. s-0123456789abcdef0.
+    Description: >-
+      ID of the existing AWS Transfer Family server for THIS environment (Env).
+      Required, no default. Find it in the AWS Transfer Family console, or run
+      "aws transfer list-servers".
   PartnerIds:
     Type: CommaDelimitedList
     Description: >-
