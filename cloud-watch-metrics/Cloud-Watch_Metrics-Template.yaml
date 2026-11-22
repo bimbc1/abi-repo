@@ -149,12 +149,18 @@ Resources:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
+  # ServiceAvailability is only published when the Lambda runs, so no data just
+  # means "idle", not "down". Missing data is notBreaching to avoid false alerts
+  # between files. This alarm therefore does NOT detect a Lambda that never
+  # runs; that needs a scheduled heartbeat (EventBridge rule + Lambda code that
+  # publishes ServiceAvailability=1 on the heartbeat event), then breaching.
   ServiceAvailabilityAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: ManifestMetadata-ServiceAvailability
-      AlarmDescription: Fires when the Lambda reports itself unavailable (retry
-        handler also failed), or when it has not reported availability at all.
+      AlarmDescription: Fires when the Manifest Metadata Lambda reports itself
+        unavailable (retry handler also failed). Periods with no invocations are
+        treated as OK, not as an outage.
       Namespace: HIE/OperationalMonitoring
       MetricName: ServiceAvailability
       Dimensions:
@@ -170,7 +176,7 @@ Resources:
       EvaluationPeriods: 1
       Threshold: 1
       ComparisonOperator: LessThanThreshold
-      TreatMissingData: breaching
+      TreatMissingData: notBreaching
       AlarmActions:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
