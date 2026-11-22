@@ -582,9 +582,34 @@ def get_transfer_log_groups():
 def transfer_user_from_stream(stream_name):
     match = re.match(r"^(?:.*/)?(.+?)(?:\.[0-9a-fA-F]{16,})?$", stream_name or "")
     return match.group(1) if match else None
+def is_close_line_for_path(message, path):
+    """True if a Transfer Family log line is the upload (CLOSE) of this exact path.
+    Works for both log formats:
+      JSON: {"activity-type":"CLOSE","path":"/<bucket>/<key>","bytes-in":...}
+      text: <user>.<session-id> CLOSE Path=/<bucket>/<key> BytesIn=...
+    """
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        return record.get("activity-type") == "CLOSE" and record.get("path") == path
+    words = text.split()
+    if "CLOSE" not in words[:3]:
+        return False
+    return re.search(r"(?:^|\s)Path=" + re.escape(path) + r"(?:\s|$)", text) is not None
+def transfer_user_from_text_line(message):
+    """Text format lines start with "<user>.<session-id>"; JSON lines return None."""
+    first = (message or "").strip().split(" ", 1)[0]
+    if not first or first.startswith("{"):
+        return None
+    return transfer_user_from_stream(first)
 def find_transfer_family_user(bucket, key):
-    path = f"/{bucket}/{key}".replace('"', '\\"')
-    pattern = '{ ($.activity-type = "CLOSE") && ($.path = "%s") }' % path
+    path = f"/{bucket}/{key}"
+    # Plain text terms (not a JSON $.field pattern), so the search matches both JSON
+    # and text Transfer Family logs. Each hit is then checked exactly in either format.
+    pattern = '"CLOSE" "%s"' % path.replace('"', '\\"')
     start_ms = int((datetime.now(timezone.utc).timestamp() - TRANSFER_LOG_LOOKBACK_SECONDS) * 1000)
     for attempt in range(TRANSFER_LOG_ATTEMPTS):
         for group in get_transfer_log_groups():
@@ -592,7 +617,11 @@ def find_transfer_family_user(bucket, key):
             for _ in range(10):
                 resp = logs.filter_log_events(**kwargs)
                 for event in resp.get("events", []):
-                    user = transfer_user_from_stream(event.get("logStreamName"))
+                    message = event.get("message")
+                    if not is_close_line_for_path(message, path):
+                        continue
+                    user = (transfer_user_from_stream(event.get("logStreamName"))
+                            or transfer_user_from_text_line(message))
                     if user:
                         return user
                 if not resp.get("nextToken"):
