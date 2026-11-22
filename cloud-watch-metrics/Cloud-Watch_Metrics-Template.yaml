@@ -1,8 +1,6 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: HIE Analytics Operational Monitoring CloudWatch Dashboard and Alarms
 
-# Controls the order and labels of the parameters on the CloudFormation
-# "Create stack" page: Env first, then the Transfer Family server ID.
 Metadata:
   AWS::CloudFormation::Interface:
     ParameterGroups:
@@ -30,27 +28,15 @@ Parameters:
       - dev
       - stg
       - prod
-  # No default on purpose: each environment (dev/stg/prod) has its own Transfer
-  # Family server. A default would silently attach the log transformer, metric
-  # filters and subscription filter to another environment's log group.
+
   TransferServerId:
     Type: String
     AllowedPattern: '^s-[0-9a-f]{17}$'
     ConstraintDescription: Must be a Transfer Family server ID, e.g. s-0123456789abcdef0.
-    Description: >-
-      ID of the existing AWS Transfer Family server for THIS environment (Env).
-      Required, no default. Find it in the AWS Transfer Family console, or run
-      "aws transfer list-servers".
+    Description: transfer family server id
   PartnerIds:
     Type: CommaDelimitedList
-    Description: >-
-      Partner IDs shown in the dashboard's Partner dropdown (comma-separated,
-      e.g. "acme,globex"). Each must equal the PartnerId dimension value the
-      Lambdas publish. "All" in the dropdown means all partners in this list.
-      This is the ONLY source of the dropdown values: CloudFormation rewrites
-      the whole DashboardBody on every stack update, so partners added by
-      editing the dashboard in the console are lost. To add or remove a
-      partner, change this parameter and update the stack.
+    Description: partner id and dropdown
 
 Conditions:
   IsGovCloud: !Equals
@@ -60,11 +46,6 @@ Conditions:
 
 Resources:
 
-
-  # Same metric the "Failed Database Connections" gauges show: each Lambda
-  # (all except Tables Generator) publishes RetryEvents with its FunctionName
-  # and FailureType=DatabaseConnectionFailure. The alarm adds the four up and
-  # fires if any of them reports a failure; the gauges show which Lambda it was.
   DatabaseConnectionFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
