@@ -14,14 +14,7 @@ Parameters:
     Description: ID of the existing AWS Transfer Family server.
   PartnerIds:
     Type: CommaDelimitedList
-    Description: >-
-      Partner IDs shown in the dashboard's Partner dropdown (comma-separated,
-      e.g. "acme,globex"). Each must equal the PartnerId dimension value the
-      Lambdas publish. "All" in the dropdown means all partners in this list.
-      This is the ONLY source of the dropdown values: CloudFormation rewrites
-      the whole DashboardBody on every stack update, so partners added by
-      editing the dashboard in the console are lost. To add or remove a
-      partner, change this parameter and update the stack.
+    Description: Partners dropdown
 
 Conditions:
   IsGovCloud: !Equals
