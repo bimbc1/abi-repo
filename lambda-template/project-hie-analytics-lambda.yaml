@@ -122,7 +122,6 @@ Resources:
       Code:
         S3Bucket: demo-bucket-idn
         S3Key: process_manifest_metadata.zip
-        
       Layers:
         - !Ref Psycopg2Layer
         - !Ref RetryHandlerLayer
@@ -137,27 +136,22 @@ Resources:
             Fn::Sub: RDSDBName-${Env}
           ENVIRONMENT: !Ref Env
           DASHBOARD_NAME: !Sub project-hie-analytics-operational-dashboard-${Env}
-          METADATA_QUEUE_URL: !ImportValue
-            Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
           METADATA_PROCESSING_QUEUE_NAME: !ImportValue
             Fn::Sub: project-hie-analytics-database-processor-queue-name-${Env}
+          METADATA_QUEUE_URL: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-queue-url-${Env}
           OPERATIONAL_SNS_TOPIC_ARN: !ImportValue
             Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
           RECOVERY_SNS_TOPIC_ARN: !ImportValue
             Fn::Sub: project-hie-analytics-partner-recovery-alerts-sns-topic-arn-${Env}
           SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Resumption in the $ENVIRONMENT Environment"
-         
           RESUMED_MESSAGE_TEMPLATE: |
             {partner_name} file delivery has resumed and files are being received successfully
-
           WARNING_INFO: "WARNING This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
-          
           ALERT_COOLDOWN_SECONDS: "3600"
           FAILURE_MESSAGE_TYPE: |-
             Manifest metadata processing has failed due to a {failure_type}.
             Error: {error}
-
-            
 
       VpcConfig:
         SubnetIds:
