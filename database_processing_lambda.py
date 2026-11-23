@@ -17,10 +17,7 @@ DB_HOST       = os.environ["DB_HOST"]
 DB_PORT       = int(os.environ.get("DB_PORT", 5432))
 DB_NAME       = os.environ["DB_NAME"]
 AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
-# CloudWatch namespace for every metric this Lambda publishes. Set per environment through
-# the METRIC_NAMESPACE env var. It must match the namespace the operational dashboard and
-# alarms read (HIE/OperationalMonitoring), otherwise the widgets stay empty.
-METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "HIE/OperationalMonitoring")
+METRIC_NAMESPACE = os.environ["METRIC_NAMESPACE"]
 
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
