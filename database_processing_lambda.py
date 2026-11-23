@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 import ssl
 import boto3
 import pg8000
-import time
 from retry_utils import retry_with_backoff
 
 logger = logging.getLogger()
@@ -31,6 +30,10 @@ conn = None
 
 
 # ---- CLOUDWATCH METRIC ----
+def report_metric_publish_failure(metric_name, error):
+    logger.error("METRIC_PUBLISH_FAILURE metric=%s error=%s", metric_name, str(error))
+
+
 def put_metric(metric_name, value=1, unit="Count"):
     try:
         cloudwatch.put_metric_data(
@@ -46,27 +49,30 @@ def put_metric(metric_name, value=1, unit="Count"):
             }],
         )
     except Exception as e:
-        logger.warning("Failed to publish metric %s: %s", metric_name, str(e))
+        report_metric_publish_failure(metric_name, e)
 
 
 # ---- PARTNER CLOUDWATCH METRIC ----
 def publish_partner_metric(partner_name, metric_name, value):
-    cloudwatch.put_metric_data(
-        Namespace=METRIC_NAMESPACE,
-        MetricData=[
-            {
-                "MetricName": metric_name,
-                "Value": value,
-                "Unit": "Count",
-                "Dimensions": [
-                    {
-                        "Name": "PartnerName",
-                        "Value": partner_name
-                    }
-                ]
-            }
-        ]
-    )
+    try:
+        cloudwatch.put_metric_data(
+            Namespace=METRIC_NAMESPACE,
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Value": value,
+                    "Unit": "Count",
+                    "Dimensions": [
+                        {
+                            "Name": "PartnerName",
+                            "Value": partner_name
+                        }
+                    ]
+                }
+            ]
+        )
+    except Exception as e:
+        report_metric_publish_failure(metric_name, e)
 
 # ---- DASHBOARD METRICS ----
 FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
@@ -79,7 +85,7 @@ def put_dashboard_metric(metric_name, value=1, dimensions=None):
             metric["Dimensions"] = dimensions
         cloudwatch.put_metric_data(Namespace=METRIC_NAMESPACE, MetricData=[metric])
     except Exception as metric_error:
-        logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
+        report_metric_publish_failure(metric_name, metric_error)
 
 
 def put_crud_failure_metrics(failure_type, partner_id):
@@ -203,7 +209,6 @@ def get_conn():
                 timeout=5,
             )
         except Exception as e:
-            put_metric("LambdaRetries")
             publish_db_connection_failure()
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
