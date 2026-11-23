@@ -105,11 +105,19 @@ def track_crud(operation):
     global _last_crud_operation
     _last_crud_operation = operation
 
+_DB_ERROR_TYPES = tuple(
+    t for t in (getattr(getattr(pg8000, "exceptions", None), "DatabaseError", None),) if t
+)
+
 
 def classify_failure(e):
     global _last_failure_type
-    if _last_crud_operation and not isinstance(e, ValueError):
+    if is_connection_error(e):
+        return
+    if _last_crud_operation:
         _last_failure_type = _last_crud_operation
+    elif isinstance(e, _DB_ERROR_TYPES):
+        _last_failure_type = "Other"
 
 
 def reset_failure_tracking():
