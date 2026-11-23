@@ -97,13 +97,6 @@ def put_crud_failure_metrics(failure_type, partner_id):
 
 
 # ---- CRUD OPERATION TRACKING ----
-# The operation running when a database error happens becomes the CRUD failure type:
-#   "Read"   - a SELECT
-#   "Create" - an INSERT
-#   "Commit" - conn.commit() (saving the transaction). Tracked separately so a failed
-#              commit is not reported as a Create failure. It is still published as
-#              CRUDFailureEvents FailureType="Commit", so it stays visible in CloudWatch,
-#              but it is not one of the dashboard's Create / Read / Update bars.
 _last_crud_operation = None
 _last_failure_type = None
 
@@ -125,9 +118,6 @@ def reset_failure_tracking():
     _last_failure_type = None
 
 # ---- DATABASE CONNECTION FAILURES (dashboard "Failed Database Connections" + alarm) ----
-# One failed connection = one RetryEvents(FunctionName, FailureType=DatabaseConnectionFailure)
-# data point, the same metric the Manifest Metadata Lambda publishes. It is sent once per
-# failed connection (after all retries), not once per retry attempt.
 class DatabaseConnectionError(Exception):
     """The database could not be reached (connect failed, or the connection was lost)."""
 
