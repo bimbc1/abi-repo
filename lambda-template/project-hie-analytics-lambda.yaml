@@ -92,7 +92,6 @@ Resources:
           DB_NAME: !ImportValue 
             Fn::Sub: RDSDBName-${Env}
 
-
       VpcConfig:
         SubnetIds:
           - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
