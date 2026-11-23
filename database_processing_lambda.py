@@ -85,18 +85,28 @@ def put_dashboard_metric(metric_name, value=1, dimensions=None):
         logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
 
 
+# ---- CRUD FAILURE METRIC (dashboard "CRUD failures - Create / Read / Update") ----
+# Partner dimension: PartnerId, the same dimension the dashboard CRUD widgets query
+# (PartnerId="<selected partner>") and the values the Partner dropdown uses (partner_id,
+# or "All"). A missing partner_id is published as "Unknown".
+#
+# Two data points per failure, both with FunctionName + FailureType + PartnerId:
+#   * PartnerId=<partner_id>  -> the failure for that partner
+#   * PartnerId="All"         -> AGGREGATE copy, read only by the dashboard's "All" view
+# The dashboard always reads exactly ONE PartnerId value at a time, so a failure is never
+# counted twice. Do not add up the partner and "All" series together.
 def put_crud_failure_metrics(failure_type, partner_id):
+    partner = str(partner_id) if partner_id not in (None, "") else "Unknown"
     dimensions = [
         {"Name": "FunctionName", "Value": FUNCTION_NAME},
         {"Name": "FailureType", "Value": failure_type},
     ]
-    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
-    for pid in ([str(partner_id), "All"] if partner_id is not None else ["All"]):
+    for pid in (partner, "All"):
         put_dashboard_metric(
             "CRUDFailureEvents",
             dimensions=dimensions + [{"Name": "PartnerId", "Value": pid}],
         )
-    logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s", failure_type, partner_id)
+    logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s (+ All aggregate)", failure_type, partner)
 
 
 # ---- CRUD OPERATION TRACKING ----
