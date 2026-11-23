@@ -502,6 +502,43 @@ Resources:
           DefaultValue: 0
           Unit: Count
 
+  DatabaseProcessorMetricPublishFailuresFilter:
+    Type: AWS::Logs::MetricFilter
+    Properties:
+      LogGroupName: !Join
+        - ''
+        - - /aws/lambda/
+          - !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-database-processor-lambda-arn-${Env}
+      FilterPattern: '"METRIC_PUBLISH_FAILURE"'
+      MetricTransformations:
+        - MetricNamespace: HIE/OperationalMonitoring
+          MetricName: DatabaseProcessorMetricPublishFailures
+          MetricValue: '1'
+          DefaultValue: 0
+          Unit: Count
+
+  DatabaseProcessorMetricPublishFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub DatabaseProcessor-MetricPublishFailures-${Env}
+      AlarmDescription: Fires when the Database Processor Lambda fails to publish a CloudWatch metric, so dashboard data may be missing.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: DatabaseProcessorMetricPublishFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
   # Login failures per partner: every AUTH_FAILURE line is sent to the Manifest
   # Metadata Lambda, which finds the user's partner and publishes PartnerLoginFailures.
   TransferLoginFailuresLambdaPermission:
@@ -607,7 +644,8 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-DatabaseConnections-${Env}",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace-${Env}",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory-${Env}",
-                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures-${Env}"
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-MetricPublishFailures-${Env}"
                   ]
                 }
               },
