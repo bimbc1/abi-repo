@@ -110,6 +110,13 @@ def put_crud_failure_metrics(failure_type, partner_id):
 
 
 # ---- CRUD OPERATION TRACKING ----
+# The operation running when a database error happens becomes the CRUD failure type:
+#   "Read"   - a SELECT
+#   "Create" - an INSERT
+#   "Commit" - conn.commit() (saving the transaction). Tracked separately so a failed
+#              commit is not reported as a Create failure. It is still published as
+#              CRUDFailureEvents FailureType="Commit", so it stays visible in CloudWatch,
+#              but it is not one of the dashboard's Create / Read / Update bars.
 _last_crud_operation = None
 _last_failure_type = None
 
@@ -441,7 +448,7 @@ def upsert_manifest_metadata(message):
     else:
         logger.info("No patient rows in message for batch_id=%s skipping patient_details", batch_id)
 
-    track_crud("Create")
+    track_crud("Commit")
     conn.commit()
     track_crud(None)
     logger.info("Processed manifest_batch for batch_id=%s", batch_id)
@@ -542,7 +549,7 @@ def upsert_patient_report_metadata(message):
             track_crud(None)
             inserted += 1
 
-    track_crud("Create")
+    track_crud("Commit")
     conn.commit()
     track_crud(None)
     logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
