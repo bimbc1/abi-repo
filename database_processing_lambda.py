@@ -134,6 +134,10 @@ class DatabaseConnectionError(Exception):
     """The database could not be reached (connect failed, or the connection was lost)."""
 
 
+class ConnectionSetupError(DatabaseConnectionError):
+    """Secrets Manager, the secret's JSON or the CA bundle failed before connecting."""
+
+
 _CONNECTION_ERROR_TYPES = tuple(
     t for t in (
         getattr(getattr(pg8000, "exceptions", None), "InterfaceError", None),  # pg8000 network / closed-connection errors
@@ -155,8 +159,6 @@ def publish_db_connection_failure():
             {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
         ],
     )
-    put_dashboard_metric("DatabaseConnectionFailures")
-    logger.info("Published DatabaseConnectionFailure metrics")
 
 
 # If connecting already failed in this invocation, later messages do not retry it again
@@ -165,14 +167,32 @@ _conn_failed_this_invocation = False
 
 
 # ---- DB CONNECTION WITH RETRY ----
+def load_connection_settings():
+    secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+    creds  = json.loads(secret["SecretString"])
+    ssl_ctx = ssl.create_default_context(
+        cafile=os.path.join(os.path.dirname(__file__), "us-gov-west-1-bundle.pem")
+    )
+    return creds, ssl_ctx
+
+
 def get_conn():
+    global _conn_failed_this_invocation
+    try:
+        creds, ssl_ctx = retry_with_backoff(
+            operation=load_connection_settings,
+            max_attempts=3,
+            retry_delay_seconds=1,
+            return_bool=False
+        )
+    except Exception as e:
+        _conn_failed_this_invocation = True
+        put_metric("DatabaseConnectionSetupFailures")
+        logger.error("DB connection setup failed (Secrets Manager, secret JSON or CA bundle): %s", str(e))
+        raise ConnectionSetupError("Failed to load database credentials or CA bundle") from e
+
     def connect():
         try:
-            secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
-            creds  = json.loads(secret["SecretString"])
-            ssl_ctx = ssl.create_default_context(
-                cafile=os.path.join(os.path.dirname(__file__), "us-gov-west-1-bundle.pem")
-            )
             return pg8000.dbapi.connect(
                 host=DB_HOST,
                 port=DB_PORT,
@@ -184,6 +204,7 @@ def get_conn():
             )
         except Exception as e:
             put_metric("LambdaRetries")
+            publish_db_connection_failure()
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
 
@@ -195,11 +216,10 @@ def get_conn():
             return_bool=False
         )
     except Exception as e:
-        global _conn_failed_this_invocation
         _conn_failed_this_invocation = True
         put_metric("DBConnectionFailure")
+        put_dashboard_metric("DatabaseConnectionFailures")
         logger.error("DB connection failed after all retries: %s", str(e))
-        publish_db_connection_failure()
         raise DatabaseConnectionError("Failed to connect to PostgreSQL after all retries") from e
 
 
@@ -677,7 +697,7 @@ def lambda_handler(event, context):
         raise
 
     try:
-        # ---- SNS TRIGGER (CloudWatch alarm) PULL FROM SQS QUEUE ----
+        # ---- SNS TRIGGER (CloudWatch alarm) -> PULL FROM SQS QUEUE ----
         if any("Sns" in record for record in records):
             logger.info("Triggered by SNS. Reading metadata messages from SQS queue.")
             processed, failed = process_sqs_queue_messages()
