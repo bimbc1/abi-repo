@@ -116,6 +116,44 @@ def reset_failure_tracking():
     _last_crud_operation = None
     _last_failure_type = None
 
+# ---- DATABASE CONNECTION FAILURES (dashboard "Failed Database Connections" + alarm) ----
+# One failed connection = one RetryEvents(FunctionName, FailureType=DatabaseConnectionFailure)
+# data point, the same metric the Manifest Metadata Lambda publishes. It is sent once per
+# failed connection (after all retries), not once per retry attempt.
+class DatabaseConnectionError(Exception):
+    """The database could not be reached (connect failed, or the connection was lost)."""
+
+
+_CONNECTION_ERROR_TYPES = tuple(
+    t for t in (
+        getattr(getattr(pg8000, "exceptions", None), "InterfaceError", None),  # pg8000 network / closed-connection errors
+        ConnectionError,
+        TimeoutError,
+    ) if t
+)
+
+
+def is_connection_error(e):
+    return isinstance(e, DatabaseConnectionError) or isinstance(e, _CONNECTION_ERROR_TYPES)
+
+
+def publish_db_connection_failure():
+    put_dashboard_metric(
+        "RetryEvents",
+        dimensions=[
+            {"Name": "FunctionName", "Value": FUNCTION_NAME},
+            {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+        ],
+    )
+    put_dashboard_metric("DatabaseConnectionFailures")
+    logger.info("Published DatabaseConnectionFailure metrics")
+
+
+# If connecting already failed in this invocation, later messages do not retry it again
+# (that would only repeat the same failure and its metrics). Reset per invocation.
+_conn_failed_this_invocation = False
+
+
 # ---- DB CONNECTION WITH RETRY ----
 def get_conn():
     def connect():
@@ -136,13 +174,6 @@ def get_conn():
             )
         except Exception as e:
             put_metric("LambdaRetries")
-            put_dashboard_metric(
-                "RetryEvents",
-                dimensions=[
-                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
-                    {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
-                ],
-            )
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
 
@@ -154,10 +185,54 @@ def get_conn():
             return_bool=False
         )
     except Exception as e:
+        global _conn_failed_this_invocation
+        _conn_failed_this_invocation = True
         put_metric("DBConnectionFailure")
         logger.error("DB connection failed after all retries: %s", str(e))
-        put_dashboard_metric("DatabaseConnectionFailures")
-        raise Exception("Failed to connect to PostgreSQL after all retries")
+        publish_db_connection_failure()
+        raise DatabaseConnectionError("Failed to connect to PostgreSQL after all retries") from e
+
+
+def ensure_conn():
+    """Reconnect if the connection was lost earlier in this invocation."""
+    global conn
+    if conn is not None:
+        return
+    if _conn_failed_this_invocation:
+        raise DatabaseConnectionError("Database is unreachable (connection already failed in this invocation)")
+    conn = get_conn()
+    logger.info("DB connection re-established")
+
+
+def drop_conn():
+    global conn
+    try:
+        if conn is not None:
+            conn.close()
+    except Exception:
+        pass
+    conn = None
+
+
+def handle_db_write_failure(e):
+    """Called for every failed write attempt. A lost connection is reported as a
+    database connection failure (and the connection is reopened on the next attempt);
+    any other database error is recorded as a CRUD failure (Create / Read / Update)."""
+    put_metric("LambdaRetries")
+    if is_connection_error(e):
+        reset_failure_tracking()          # not a CRUD failure
+        if not isinstance(e, DatabaseConnectionError):
+            # connection was open and then lost; get_conn() already reports its own failures
+            logger.warning("DB connection lost during write: %s", str(e))
+            publish_db_connection_failure()
+        drop_conn()
+        return
+    classify_failure(e)
+    logger.warning("DB write attempt failed: %s", str(e))
+    try:
+        conn.rollback()
+    except Exception:
+        pass
 
 
 # ---- MESSAGE ROUTER WITH RETRY ----
@@ -170,15 +245,10 @@ def process_message(message):
         def run():
             reset_failure_tracking()
             try:
+                ensure_conn()
                 upsert_manifest_metadata(message)
             except Exception as e:
-                put_metric("LambdaRetries") 
-                classify_failure(e)
-                logger.warning("DB write attempt failed: %s", str(e))
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
+                handle_db_write_failure(e)
                 raise
 
         result = retry_with_backoff(
@@ -196,15 +266,10 @@ def process_message(message):
         def run():
             reset_failure_tracking()
             try:
+                ensure_conn()
                 upsert_patient_report_metadata(message)
             except Exception as e:
-                put_metric("LambdaRetries")
-                classify_failure(e)
-                logger.warning("DB write attempt failed: %s", str(e))
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
+                handle_db_write_failure(e)
                 raise
 
         result = retry_with_backoff(
@@ -592,7 +657,8 @@ def process_sqs_queue_messages():
 
 # ---- LAMBDA HANDLER ----
 def lambda_handler(event, context):
-    global conn
+    global conn, _conn_failed_this_invocation
+    _conn_failed_this_invocation = False
     records = event.get("Records", [])
     logger.info("Lambda triggered - %d records", len(records))
 
