@@ -2,7 +2,6 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-import ssl
 import boto3
 import pg8000
 from retry_utils import retry_with_backoff
@@ -141,7 +140,7 @@ class DatabaseConnectionError(Exception):
 
 
 class ConnectionSetupError(DatabaseConnectionError):
-    """Secrets Manager, the secret's JSON or the CA bundle failed before connecting."""
+    """Secrets Manager or the secret's JSON failed before connecting."""
 
 
 _CONNECTION_ERROR_TYPES = tuple(
@@ -176,16 +175,13 @@ _conn_failed_this_invocation = False
 def load_connection_settings():
     secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
     creds  = json.loads(secret["SecretString"])
-    ssl_ctx = ssl.create_default_context(
-        cafile=os.path.join(os.path.dirname(__file__), "us-gov-west-1-bundle.pem")
-    )
-    return creds, ssl_ctx
+    return creds
 
 
 def get_conn():
     global _conn_failed_this_invocation
     try:
-        creds, ssl_ctx = retry_with_backoff(
+        creds = retry_with_backoff(
             operation=load_connection_settings,
             max_attempts=3,
             retry_delay_seconds=1,
@@ -194,18 +190,18 @@ def get_conn():
     except Exception as e:
         _conn_failed_this_invocation = True
         put_metric("DatabaseConnectionSetupFailures")
-        logger.error("DB connection setup failed (Secrets Manager, secret JSON or CA bundle): %s", str(e))
-        raise ConnectionSetupError("Failed to load database credentials or CA bundle") from e
+        logger.error("DB connection setup failed (Secrets Manager or secret JSON): %s", str(e))
+        raise ConnectionSetupError("Failed to load database credentials") from e
 
     def connect():
         try:
-            return pg8000.dbapi.connect(
+            return pg8000.connect(
                 host=DB_HOST,
                 port=DB_PORT,
                 database=DB_NAME,
                 user=creds["username"],
                 password=creds["password"],
-                ssl_context=ssl_ctx,
+                ssl_context=True,
                 timeout=5,
             )
         except Exception as e:
