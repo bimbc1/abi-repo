@@ -17,6 +17,10 @@ DB_HOST       = os.environ["DB_HOST"]
 DB_PORT       = int(os.environ.get("DB_PORT", 5432))
 DB_NAME       = os.environ["DB_NAME"]
 AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
+# CloudWatch namespace for every metric this Lambda publishes. Set per environment through
+# the METRIC_NAMESPACE env var. It must match the namespace the operational dashboard and
+# alarms read (HIE/OperationalMonitoring), otherwise the widgets stay empty.
+METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "HIE/OperationalMonitoring")
 
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
@@ -33,7 +37,7 @@ conn = None
 def put_metric(metric_name, value=1, unit="Count"):
     try:
         cloudwatch.put_metric_data(
-            Namespace="HIE/OperationalMonitoring",
+            Namespace=METRIC_NAMESPACE,
             MetricData=[{
                 "MetricName": metric_name,
                 "Value": value,
@@ -51,7 +55,7 @@ def put_metric(metric_name, value=1, unit="Count"):
 # ---- PARTNER CLOUDWATCH METRIC ----
 def publish_partner_metric(partner_name, metric_name, value):
     cloudwatch.put_metric_data(
-        Namespace="HIE/OperationalMonitoring",
+        Namespace=METRIC_NAMESPACE,
         MetricData=[
             {
                 "MetricName": metric_name,
@@ -76,7 +80,7 @@ def put_dashboard_metric(metric_name, value=1, dimensions=None):
         metric = {"MetricName": metric_name, "Value": value, "Unit": "Count"}
         if dimensions:
             metric["Dimensions"] = dimensions
-        cloudwatch.put_metric_data(Namespace="HIE/OperationalMonitoring", MetricData=[metric])
+        cloudwatch.put_metric_data(Namespace=METRIC_NAMESPACE, MetricData=[metric])
     except Exception as metric_error:
         logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
 
