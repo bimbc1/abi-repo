@@ -677,7 +677,7 @@ def lambda_handler(event, context):
         raise
 
     try:
-        # ---- SNS TRIGGER (CloudWatch alarm) -> PULL FROM SQS QUEUE ----
+        # ---- SNS TRIGGER (CloudWatch alarm) PULL FROM SQS QUEUE ----
         if any("Sns" in record for record in records):
             logger.info("Triggered by SNS. Reading metadata messages from SQS queue.")
             processed, failed = process_sqs_queue_messages()
