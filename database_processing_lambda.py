@@ -98,7 +98,6 @@ def put_crud_failure_metrics(failure_type, partner_id):
 
 # ---- CRUD OPERATION TRACKING ----
 _last_crud_operation = None
-_last_failure_type = None
 
 
 def track_crud(operation):
@@ -110,20 +109,25 @@ _DB_ERROR_TYPES = tuple(
 )
 
 
-def classify_failure(e):
-    global _last_failure_type
+def classify_failure(e, operation):
     if is_connection_error(e):
-        return
-    if _last_crud_operation:
-        _last_failure_type = _last_crud_operation
-    elif isinstance(e, _DB_ERROR_TYPES):
-        _last_failure_type = "Other"
+        return None
+    if operation:
+        return operation
+    if isinstance(e, _DB_ERROR_TYPES):
+        return "Other"
+    return None
 
 
 def reset_failure_tracking():
-    global _last_crud_operation, _last_failure_type
+    global _last_crud_operation
     _last_crud_operation = None
-    _last_failure_type = None
+
+
+class MessageProcessingError(Exception):
+    def __init__(self, message, crud_failure_type=None):
+        super().__init__(message)
+        self.crud_failure_type = crud_failure_type
 
 # ---- DATABASE CONNECTION FAILURES (dashboard "Failed Database Connections" + alarm) ----
 class DatabaseConnectionError(Exception):
@@ -232,61 +236,58 @@ def handle_db_write_failure(e):
             logger.warning("DB connection lost during write: %s", str(e))
             publish_db_connection_failure()
         drop_conn()
-        return
-    classify_failure(e)
-    logger.warning("DB write attempt failed: %s", str(e))
+        return None
+    failure_type = classify_failure(e, _last_crud_operation)
+    logger.warning("DB write attempt failed (%s): %s", failure_type, str(e))
     try:
         conn.rollback()
     except Exception:
         pass
+    return failure_type
 
 
 # ---- MESSAGE ROUTER WITH RETRY ----
+def run_with_retries(message_type, write, message):
+    last_failure = {"type": None}
+
+    def run():
+        reset_failure_tracking()
+        try:
+            ensure_conn()
+            write(message)
+        except Exception as e:
+            last_failure["type"] = handle_db_write_failure(e)
+            raise
+
+    try:
+        result = retry_with_backoff(
+            operation=run,
+            max_attempts=3,
+            retry_delay_seconds=1,
+            return_bool=True
+        )
+    except Exception as e:
+        raise MessageProcessingError(
+            f"Failed to process message_type: {message_type} after all retries",
+            last_failure["type"],
+        ) from e
+
+    if result is False:
+        raise MessageProcessingError(
+            f"Failed to process message_type: {message_type} after all retries",
+            last_failure["type"],
+        )
+
+
 def process_message(message):
     message_type = message.get("message_type")
     logger.info("Routing message_type=%s", message_type)
 
     if message_type in ("MANIFEST_METADATA_INSERT", "MANIFEST_METADATA_UPSERT"):
-
-        def run():
-            reset_failure_tracking()
-            try:
-                ensure_conn()
-                upsert_manifest_metadata(message)
-            except Exception as e:
-                handle_db_write_failure(e)
-                raise
-
-        result = retry_with_backoff(
-            operation=run,
-            max_attempts=3,
-            retry_delay_seconds=1,
-            return_bool=True
-        )
-
-        if result is False:
-            raise Exception(f"Failed to process message_type: {message_type} after all retries")
+        run_with_retries(message_type, upsert_manifest_metadata, message)
 
     elif message_type == "PATIENT_REPORT_METADATA_UPSERT":
-
-        def run():
-            reset_failure_tracking()
-            try:
-                ensure_conn()
-                upsert_patient_report_metadata(message)
-            except Exception as e:
-                handle_db_write_failure(e)
-                raise
-
-        result = retry_with_backoff(
-            operation=run,
-            max_attempts=3,
-            retry_delay_seconds=1,
-            return_bool=True
-        )
-
-        if result is False:
-            raise Exception(f"Failed to process message_type: {message_type} after all retries")
+        run_with_retries(message_type, upsert_patient_report_metadata, message)
 
     else:
         raise ValueError(f"Unsupported message type: {message_type}")
@@ -601,14 +602,14 @@ def handle_one_message(message_id, raw_body):
             )
         logger.error("failed msg=%s: %s", message_id, str(e))
         put_metric("LambdaProcessingFailures")
-        classify_failure(e)
-        if _last_failure_type:
+        failure_type = getattr(e, "crud_failure_type", None)
+        if failure_type:
             partner_id = (
                 (message.get("partner") or {}).get("partner_id")
                 if isinstance(message, dict)
                 else None
             )
-            put_crud_failure_metrics(_last_failure_type, partner_id)
+            put_crud_failure_metrics(failure_type, partner_id)
         return False
 
 
