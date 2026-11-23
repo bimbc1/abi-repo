@@ -2,10 +2,8 @@ import os
 import json
 import logging
 from datetime import datetime, timezone
-import ssl
 import boto3
 import pg8000
-import time
 from retry_utils import retry_with_backoff
 
 logger = logging.getLogger()
@@ -17,6 +15,7 @@ DB_HOST       = os.environ["DB_HOST"]
 DB_PORT       = int(os.environ.get("DB_PORT", 5432))
 DB_NAME       = os.environ["DB_NAME"]
 AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
+METRIC_NAMESPACE = os.environ["METRIC_NAMESPACE"]
 
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
@@ -30,10 +29,14 @@ conn = None
 
 
 # ---- CLOUDWATCH METRIC ----
+def report_metric_publish_failure(metric_name, error):
+    logger.error("METRIC_PUBLISH_FAILURE metric=%s error=%s", metric_name, str(error))
+
+
 def put_metric(metric_name, value=1, unit="Count"):
     try:
         cloudwatch.put_metric_data(
-            Namespace="HIE/OperationalMonitoring",
+            Namespace=METRIC_NAMESPACE,
             MetricData=[{
                 "MetricName": metric_name,
                 "Value": value,
@@ -45,27 +48,30 @@ def put_metric(metric_name, value=1, unit="Count"):
             }],
         )
     except Exception as e:
-        logger.warning("Failed to publish metric %s: %s", metric_name, str(e))
+        report_metric_publish_failure(metric_name, e)
 
 
 # ---- PARTNER CLOUDWATCH METRIC ----
 def publish_partner_metric(partner_name, metric_name, value):
-    cloudwatch.put_metric_data(
-        Namespace="HIE/OperationalMonitoring",
-        MetricData=[
-            {
-                "MetricName": metric_name,
-                "Value": value,
-                "Unit": "Count",
-                "Dimensions": [
-                    {
-                        "Name": "PartnerName",
-                        "Value": partner_name
-                    }
-                ]
-            }
-        ]
-    )
+    try:
+        cloudwatch.put_metric_data(
+            Namespace=METRIC_NAMESPACE,
+            MetricData=[
+                {
+                    "MetricName": metric_name,
+                    "Value": value,
+                    "Unit": "Count",
+                    "Dimensions": [
+                        {
+                            "Name": "PartnerName",
+                            "Value": partner_name
+                        }
+                    ]
+                }
+            ]
+        )
+    except Exception as e:
+        report_metric_publish_failure(metric_name, e)
 
 # ---- DASHBOARD METRICS ----
 FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
@@ -76,52 +82,119 @@ def put_dashboard_metric(metric_name, value=1, dimensions=None):
         metric = {"MetricName": metric_name, "Value": value, "Unit": "Count"}
         if dimensions:
             metric["Dimensions"] = dimensions
-        cloudwatch.put_metric_data(Namespace="HIE/OperationalMonitoring", MetricData=[metric])
+        cloudwatch.put_metric_data(Namespace=METRIC_NAMESPACE, MetricData=[metric])
     except Exception as metric_error:
-        logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
+        report_metric_publish_failure(metric_name, metric_error)
 
 
 def put_crud_failure_metrics(failure_type, partner_id):
+    partner = str(partner_id) if partner_id not in (None, "") else "Unknown"  # "Unknown" fallback
     dimensions = [
         {"Name": "FunctionName", "Value": FUNCTION_NAME},
         {"Name": "FailureType", "Value": failure_type},
     ]
-    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
-    for pid in ([str(partner_id), "All"] if partner_id is not None else ["All"]):
+    for pid in (partner, "All"):                                               # only 2 copies: partner + All
         put_dashboard_metric(
             "CRUDFailureEvents",
             dimensions=dimensions + [{"Name": "PartnerId", "Value": pid}],
         )
-    logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s", failure_type, partner_id)
+    logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s (+ All aggregate)", failure_type, partner)
 
 
 # ---- CRUD OPERATION TRACKING ----
 _last_crud_operation = None
-_last_failure_type = None
 
 
 def track_crud(operation):
     global _last_crud_operation
     _last_crud_operation = operation
 
+_DB_ERROR_TYPES = tuple(
+    t for t in (getattr(getattr(pg8000, "exceptions", None), "DatabaseError", None),) if t
+)
 
-def classify_failure(e):
-    global _last_failure_type
-    if _last_crud_operation and not isinstance(e, ValueError):
-        _last_failure_type = _last_crud_operation
+
+def classify_failure(e, operation):
+    if is_connection_error(e):
+        return None
+    if operation:
+        return operation
+    if isinstance(e, _DB_ERROR_TYPES):
+        return "Other"
+    return None
 
 
 def reset_failure_tracking():
-    global _last_crud_operation, _last_failure_type
+    global _last_crud_operation
     _last_crud_operation = None
-    _last_failure_type = None
+
+
+class MessageProcessingError(Exception):
+    def __init__(self, message, crud_failure_type=None):
+        super().__init__(message)
+        self.crud_failure_type = crud_failure_type
+
+# ---- DATABASE CONNECTION FAILURES (dashboard "Failed Database Connections" + alarm) ----
+class DatabaseConnectionError(Exception):
+    """The database could not be reached (connect failed, or the connection was lost)."""
+
+
+class ConnectionSetupError(DatabaseConnectionError):
+    """Secrets Manager or the secret's JSON failed before connecting."""
+
+
+_CONNECTION_ERROR_TYPES = tuple(
+    t for t in (
+        getattr(getattr(pg8000, "exceptions", None), "InterfaceError", None),  # pg8000 network / closed-connection errors
+        ConnectionError,
+        TimeoutError,
+    ) if t
+)
+
+
+def is_connection_error(e):
+    return isinstance(e, DatabaseConnectionError) or isinstance(e, _CONNECTION_ERROR_TYPES)
+
+
+def publish_db_connection_failure():
+    put_dashboard_metric(
+        "RetryEvents",
+        dimensions=[
+            {"Name": "FunctionName", "Value": FUNCTION_NAME},
+            {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+        ],
+    )
+
+
+# If connecting already failed in this invocation, later messages do not retry it again
+# (that would only repeat the same failure and its metrics). Reset per invocation.
+_conn_failed_this_invocation = False
+
 
 # ---- DB CONNECTION WITH RETRY ----
+def load_connection_settings():
+    secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
+    creds  = json.loads(secret["SecretString"])
+    return creds
+
+
 def get_conn():
+    global _conn_failed_this_invocation
+    try:
+        creds = retry_with_backoff(
+            operation=load_connection_settings,
+            max_attempts=3,
+            retry_delay_seconds=1,
+            return_bool=False
+        )
+    except Exception as e:
+        _conn_failed_this_invocation = True
+        put_metric("DatabaseConnectionSetupFailures")
+        logger.error("DB connection setup failed (Secrets Manager or secret JSON): %s", str(e))
+        raise ConnectionSetupError("Failed to load database credentials") from e
+
     def connect():
         try:
-            secret = sm.get_secret_value(SecretId=DB_SECRET_ARN)
-            creds  = json.loads(secret["SecretString"])
             return pg8000.connect(
                 host=DB_HOST,
                 port=DB_PORT,
@@ -129,16 +202,10 @@ def get_conn():
                 user=creds["username"],
                 password=creds["password"],
                 ssl_context=True,
+                timeout=5,
             )
         except Exception as e:
-            put_metric("LambdaRetries")
-            put_dashboard_metric(
-                "RetryEvents",
-                dimensions=[
-                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
-                    {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
-                ],
-            )
+            publish_db_connection_failure()
             logger.warning("DB connection attempt failed: %s", str(e))
             raise
 
@@ -150,68 +217,98 @@ def get_conn():
             return_bool=False
         )
     except Exception as e:
+        _conn_failed_this_invocation = True
         put_metric("DBConnectionFailure")
-        logger.error("DB connection failed after all retries: %s", str(e))
         put_dashboard_metric("DatabaseConnectionFailures")
-        raise Exception("Failed to connect to PostgreSQL after all retries")
+        logger.error("DB connection failed after all retries: %s", str(e))
+        raise DatabaseConnectionError("Failed to connect to PostgreSQL after all retries") from e
+
+
+def ensure_conn():
+    """Reconnect if the connection was lost earlier in this invocation."""
+    global conn
+    if conn is not None:
+        return
+    if _conn_failed_this_invocation:
+        raise DatabaseConnectionError("Database is unreachable (connection already failed in this invocation)")
+    conn = get_conn()
+    logger.info("DB connection re-established")
+
+
+def drop_conn():
+    global conn
+    try:
+        if conn is not None:
+            conn.close()
+    except Exception:
+        pass
+    conn = None
+
+
+def handle_db_write_failure(e):
+    """Called for every failed write attempt. A lost connection is reported as a
+    database connection failure (and the connection is reopened on the next attempt);
+    any other database error is recorded as a CRUD failure (Create / Read / Update)."""
+    put_metric("LambdaRetries")
+    if is_connection_error(e):
+        reset_failure_tracking()          # not a CRUD failure
+        if not isinstance(e, DatabaseConnectionError):
+            # connection was open and then lost; get_conn() already reports its own failures
+            logger.warning("DB connection lost during write: %s", str(e))
+            publish_db_connection_failure()
+        drop_conn()
+        return None
+    failure_type = classify_failure(e, _last_crud_operation)
+    logger.warning("DB write attempt failed (%s): %s", failure_type, str(e))
+    try:
+        conn.rollback()
+    except Exception:
+        pass
+    return failure_type
 
 
 # ---- MESSAGE ROUTER WITH RETRY ----
+def run_with_retries(message_type, write, message):
+    last_failure = {"type": None}
+
+    def run():
+        reset_failure_tracking()
+        try:
+            ensure_conn()
+            write(message)
+        except Exception as e:
+            last_failure["type"] = handle_db_write_failure(e)
+            raise
+
+    try:
+        result = retry_with_backoff(
+            operation=run,
+            max_attempts=3,
+            retry_delay_seconds=1,
+            return_bool=True
+        )
+    except Exception as e:
+        raise MessageProcessingError(
+            f"Failed to process message_type: {message_type} after all retries",
+            last_failure["type"],
+        ) from e
+
+    if result is False:
+        raise MessageProcessingError(
+            f"Failed to process message_type: {message_type} after all retries",
+            last_failure["type"],
+        )
+
+
 def process_message(message):
     message_type = message.get("message_type")
     logger.info("Routing message_type=%s", message_type)
 
     if message_type in ("MANIFEST_METADATA_INSERT", "MANIFEST_METADATA_UPSERT"):
-
-        def run():
-            reset_failure_tracking()
-            try:
-                upsert_manifest_metadata(message)
-            except Exception as e:
-                put_metric("LambdaRetries") 
-                classify_failure(e)
-                logger.warning("DB write attempt failed: %s", str(e))
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-
-        result = retry_with_backoff(
-            operation=run,
-            max_attempts=3,
-            retry_delay_seconds=1,
-            return_bool=True
-        )
-
-        if result is False:
-            raise Exception(f"Failed to process message_type: {message_type} after all retries")
+        run_with_retries(message_type, upsert_manifest_metadata, message)
 
     elif message_type == "PATIENT_REPORT_METADATA_UPSERT":
-
-        def run():
-            reset_failure_tracking()
-            try:
-                upsert_patient_report_metadata(message)
-            except Exception as e:
-                put_metric("LambdaRetries")
-                classify_failure(e)
-                logger.warning("DB write attempt failed: %s", str(e))
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
-
-        result = retry_with_backoff(
-            operation=run,
-            max_attempts=3,
-            retry_delay_seconds=1,
-            return_bool=True
-        )
-
-        if result is False:
-            raise Exception(f"Failed to process message_type: {message_type} after all retries")
+        run_with_retries(message_type, upsert_patient_report_metadata, message)
 
     else:
         raise ValueError(f"Unsupported message type: {message_type}")
@@ -237,11 +334,10 @@ def upsert_manifest_metadata(message):
 
     expected    = counts.get("manifest_expected_count", 0)
     actual      = counts.get("zip_actual_count", 0)
-    # Negative = fewer files than the manifest says (e.g. manifest 10, actual 7 -> -3)
-    discrepancy = counts.get("count_discrepancy", (actual or 0) - (expected or 0))
+    discrepancy = counts.get("count_discrepancy", abs((actual or 0) - (expected or 0)))
     now         = datetime.now(timezone.utc)
 
-    logger.info("batch_id=%s | manifest_expected=%s | actual=%s | count_discrepancy=%s",
+    logger.info("batch_id=%s expected=%s actual=%s discrepancy=%s",
                 batch_id, expected, actual, discrepancy)
 
     cur = conn.cursor()
@@ -359,7 +455,7 @@ def upsert_manifest_metadata(message):
     else:
         logger.info("No patient rows in message for batch_id=%s skipping patient_details", batch_id)
 
-    track_crud("Create")
+    track_crud("Commit")
     conn.commit()
     track_crud(None)
     logger.info("Processed manifest_batch for batch_id=%s", batch_id)
@@ -460,7 +556,7 @@ def upsert_patient_report_metadata(message):
             track_crud(None)
             inserted += 1
 
-    track_crud("Create")
+    track_crud("Commit")
     conn.commit()
     track_crud(None)
     logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
@@ -527,14 +623,14 @@ def handle_one_message(message_id, raw_body):
             )
         logger.error("failed msg=%s: %s", message_id, str(e))
         put_metric("LambdaProcessingFailures")
-        classify_failure(e)
-        if _last_failure_type:
+        failure_type = getattr(e, "crud_failure_type", None)
+        if failure_type:
             partner_id = (
                 (message.get("partner") or {}).get("partner_id")
                 if isinstance(message, dict)
                 else None
             )
-            put_crud_failure_metrics(_last_failure_type, partner_id)
+            put_crud_failure_metrics(failure_type, partner_id)
         return False
 
 
@@ -589,7 +685,8 @@ def process_sqs_queue_messages():
 
 # ---- LAMBDA HANDLER ----
 def lambda_handler(event, context):
-    global conn
+    global conn, _conn_failed_this_invocation
+    _conn_failed_this_invocation = False
     records = event.get("Records", [])
     logger.info("Lambda triggered - %d records", len(records))
 
