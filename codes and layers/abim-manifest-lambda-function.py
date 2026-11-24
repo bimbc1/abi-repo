@@ -126,9 +126,9 @@ def classify_batch_type(filename):
     lower = filename.lower()
     if is_manifest_file(filename):
         if "outbound" in lower:
-            return "RECEIVED"
-        if "inbound" in lower:
             return "DISCLOSURE"
+        if "inbound" in lower:
+            return "RECEIVED"
         return None
     if is_report_file(filename) or is_zip_file(filename):
         if "received" in lower:
@@ -137,10 +137,10 @@ def classify_batch_type(filename):
             return "DISCLOSURE"
         return None
     return None
-    # --- BATCH TYPE LABEL FOR LOGS (RECEIVED -> OUTBOUND_RECEIVED, DISCLOSURE -> INBOUND_DISCLOSURE) ---
+    # --- BATCH TYPE LABEL FOR LOGS (RECEIVED -> INBOUND_RECEIVED, DISCLOSURE -> OUTBOUND_DISCLOSURE) ---
 BATCH_TYPE_LOG_LABELS = {
-    "RECEIVED": "OUTBOUND_RECEIVED",
-    "DISCLOSURE": "INBOUND_DISCLOSURE",
+    "RECEIVED": "INBOUND_RECEIVED",
+    "DISCLOSURE": "OUTBOUND_DISCLOSURE",
 }
 def batch_type_label(batch_type):
     return BATCH_TYPE_LOG_LABELS.get(batch_type, batch_type)
@@ -709,13 +709,74 @@ def find_transfer_user_bucket(log_group, user):
         if time.time() >= deadline:
             break
     return None
+    # ---TRANSFER FAMILY UPLOAD FAILURES PER PARTNER (PARTIAL_CLOSE lines, same subscription filter)---
+    # A failed upload line has the uploaded path (/<bucket>/<key>), so the partner comes straight
+    # from the bucket. The user comes from the log stream ("<user>.<session-id>") or the text line.
+    # Works for both log formats:
+    #   JSON: {"activity-type":"PARTIAL_CLOSE","path":"/<bucket>/<key>","user":"Oracle",...}
+    #   text: Oracle.<session-id> PARTIAL_CLOSE Path=/<bucket>/<key> Mode=... BytesIn=...
+def parse_partial_close_line(message):
+    """Return (is_partial_close, user, path) for a Transfer Family log line."""
+    text = (message or "").strip()
+    try:
+        record = json.loads(text)
+    except ValueError:
+        record = None
+    if isinstance(record, dict):
+        if record.get("activity-type") != "PARTIAL_CLOSE":
+            return False, None, None
+        return True, record.get("user"), record.get("path")
+    if "PARTIAL_CLOSE" not in text.split()[:3]:
+        return False, None, None
+    # Path runs until the next " Name=" field (paths may contain spaces) or the end of the line.
+    path = re.search(r"(?:^|\s)Path=(.+?)(?=\s+[A-Za-z]+=|$)", text)
+    return True, transfer_user_from_text_line(text), path.group(1) if path else None
+def handle_transfer_upload_failure(message, log_stream):
+    """Publish PartnerUploadFailures for one PARTIAL_CLOSE line. Returns True if it was one."""
+    is_partial_close, line_user, path = parse_partial_close_line(message)
+    if not is_partial_close:
+        return False
+    user = line_user or transfer_user_from_stream(log_stream) or "Unknown"
+    parts = [x for x in (path or "").split("/") if x]
+    bucket = parts[0] if parts else None
+    partner_id = None
+    try:
+        if bucket:
+            get_partner_name_for_bucket(bucket)
+            partner_id = _bucket_partner_ids.get(bucket)
+    except Exception as e:
+        logger.warning("Could not find the partner for failed upload %s: %s", path, e)
+    if partner_id is None:
+        reason = "no path in the PARTIAL_CLOSE line" if not bucket else (
+            "bucket %s is not registered in partner_registry" % bucket)
+        logger.warning(
+            "Upload failure for Transfer Family user %s (path=%s) could not be matched to a partner: %s. "
+            "Counted under All only.", user, path, reason
+        )
+    else:
+        logger.info(
+            "Upload failure | Transfer Family user %s -> partner %s | partner_id=%s | path=%s",
+            user, _bucket_partner_names.get(bucket), partner_id, path
+        )
+    put_partner_metric(
+        "HIE/OperationalMonitoring", "PartnerUploadFailures", partner_id, 1,
+        extra_dimensions=[{"Name": "TransferUser", "Value": user}]
+    )
+    return True
 def handle_transfer_login_failures(event):
+    """Handle Transfer Family log lines sent by the subscription filter:
+    AUTH_FAILURE -> PartnerLoginFailures, PARTIAL_CLOSE -> PartnerUploadFailures."""
     payload = json.loads(gzip.decompress(base64.b64decode(event["awslogs"]["data"])))
     if payload.get("messageType") != "DATA_MESSAGE":
         return {"statusCode": 200, "body": "Control message ignored."}
     log_group = payload.get("logGroup")
+    log_stream = payload.get("logStream")
     counted = 0
+    upload_failures = 0
     for log_event in payload.get("logEvents", []):
+        if handle_transfer_upload_failure(log_event.get("message"), log_stream):
+            upload_failures += 1
+            continue
         activity, user, _ = parse_transfer_log_line(log_event.get("message"))
         if activity != "AUTH_FAILURE":
             continue
@@ -751,7 +812,8 @@ def handle_transfer_login_failures(event):
             extra_dimensions=[{"Name": "TransferUser", "Value": user}]
         )
         counted += 1
-    return {"statusCode": 200, "body": f"Login failures counted: {counted}"}
+    return {"statusCode": 200,
+            "body": f"Login failures counted: {counted}. Upload failures counted: {upload_failures}"}
     # ---NUMBER OF REGISTERED PARTNERS (cached 15 min; dashboard "All" expected files)---
 _registered_partner_count = {"value": None, "at": None}
 def get_registered_partner_count():
@@ -1217,7 +1279,6 @@ def extract_disclosure_report_rows(bucket, key):
             "document_id": parts[15],
             "ccda_file": parts[16],
             "commonwell_indicator": parts[17],
-            "ohin_indicator": (parts[18].strip() or None) if len(parts) > 18 else None,
         })
     return rows
     # ---SQS MESSAGE BUILDERS---
@@ -1323,7 +1384,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": INGESTION_METHOD,
-        "direction": "outbound" if batch_type == "RECEIVED" else "inbound",
+        "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
