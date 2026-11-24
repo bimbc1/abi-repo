@@ -54,12 +54,20 @@ def get_db_credentials():
 def get_conn():
     """
     Create a PostgreSQL connection using pg8000, retrying up to 3 times.
+
+    Each attempt loads the credentials from Secrets Manager AND connects, so a
+    Secrets Manager (or secret JSON) failure is retried just like a connect failure.
+
+    RetryEvents (FailureType=DatabaseConnectionFailure) is published only when a
+    retry follows (attempt < max_attempts), so 3 failed attempts give 2 RetryEvents.
+    The final failure is not a retry: it is re-raised and reported once as
+    DatabaseConnectionFailures in lambda_handler.
     """
-    creds = get_db_credentials()
     max_attempts = 3
 
     for attempt in range(1, max_attempts + 1):
         try:
+            creds = get_db_credentials()
             return pg8000.connect(
                 host=creds["host"],
                 port=creds["port"],
@@ -69,6 +77,10 @@ def get_conn():
                 ssl_context=creds["ssl_context"]
             )
         except Exception as e:
+            logger.warning("DB connection attempt %s/%s failed: %s",
+                           attempt, max_attempts, str(e))
+            if attempt == max_attempts:
+                raise  # final failure: no retry follows, so no RetryEvents
             put_dashboard_metric(
                 "RetryEvents",
                 dimensions=[
@@ -76,11 +88,8 @@ def get_conn():
                     {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
                 ],
             )
-            logger.warning("DB connection attempt %s/%s failed: %s",
-                           attempt, max_attempts, str(e))
-            if attempt == max_attempts:
-                raise
             time.sleep(1)
+
 
 def format_last_seen_duration(elapsed_seconds):
     """
@@ -108,7 +117,7 @@ def format_last_seen_duration(elapsed_seconds):
 
 
 def publish_partner_metric(partner_name, metric_name, value):
-    partner_name_clean = str(partner_name)
+    partner_name_clean = str(partner_name).replace(" ", "_")
 
     cloudwatch.put_metric_data(
         Namespace="HIE/PartnerMonitoring",
@@ -127,6 +136,7 @@ def publish_partner_metric(partner_name, metric_name, value):
         ]
     )
 
+
 # ---- DASHBOARD METRICS ----
 FUNCTION_NAME = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
 
@@ -142,20 +152,29 @@ def put_dashboard_metric(metric_name, value=1, dimensions=None,
         logger.warning("Failed to publish metric %s: %s", metric_name, str(metric_error))
 
 
-def put_crud_failure_metrics(failure_type, partner_name):
+def put_crud_failure_metrics(failure_type, partner_id):
+    """Publish CRUDFailureEvents keyed by PartnerId, the same dimension the other Lambdas
+    use and the dashboard CRUD widgets query (the Partner dropdown value is the partner_id).
+
+    Exactly two datapoints per failure, with no partner-less datapoint:
+      1. PartnerId=<partner_id>, or "Unknown" when no partner is being processed
+         (e.g. the Step 1 query that reads ALL partners)
+      2. PartnerId="All" -> an AGGREGATE copy, used only when "All" is selected in the
+         dashboard Partner dropdown. Do not SUM across all PartnerId values: that
+         would count each failure twice."""
+    partner = str(partner_id).strip() if partner_id not in (None, "") else ""
+    partner = partner or "Unknown"
     dimensions = [
         {"Name": "FunctionName", "Value": FUNCTION_NAME},
         {"Name": "FailureType", "Value": failure_type},
     ]
-    put_dashboard_metric("CRUDFailureEvents", dimensions=dimensions)
-    partner_values = ["All"]
-    if partner_name is not None:
-        partner_values.insert(0, str(partner_name))
-    for pname in partner_values:
+    for pid in (partner, "All"):  # partner-level datapoint + "All" aggregate
         put_dashboard_metric(
             "CRUDFailureEvents",
-            dimensions=dimensions + [{"Name": "PartnerName", "Value": pname}],
+            dimensions=dimensions + [{"Name": "PartnerId", "Value": pid}],
         )
+    logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s (+ All aggregate)",
+                failure_type, partner)
 
 
 def put_partner_breach_metrics(partner_id, partner_name, in_breach):
@@ -179,6 +198,10 @@ def put_breach_event_metric(partner_id):
 
 
 # ---- CRUD OPERATION TRACKING ----
+# _last_crud_operation is set just BEFORE a database step and cleared (None) right
+# AFTER it succeeds. So if an error happens, it names the step that actually failed,
+# and an error outside a tracked step is never blamed on an earlier Read or Update.
+# It is also reset at the end of every invocation (finally in lambda_handler).
 _last_crud_operation = None
 
 
@@ -186,16 +209,56 @@ def track_crud(operation):
     global _last_crud_operation
     _last_crud_operation = operation
 
+
+# Errors that count as a failed database step (CRUDFailureEvents) when they happen
+# during a tracked Read / Update / Commit:
+#   * pg8000.Error          - all pg8000 errors, incl. DatabaseError and InterfaceError
+#   * pg8000.InterfaceError - listed explicitly for clarity (it is a pg8000.Error)
+#   * OSError               - network / socket errors raised by a query, incl.
+#                             BrokenPipeError, ConnectionResetError and socket timeouts
+CRUD_ERROR_TYPES = (pg8000.Error, pg8000.InterfaceError, OSError)
+
+
+def commit_tracked(conn):
+    """Commit as its own tracked step, so a commit error is reported as "Commit"."""
+    track_crud("Commit")
+    conn.commit()
+    track_crud(None)
+
+
+def publish_db_connection_exhausted():
+    """The database could not be reached after all retries. Published with the same
+    FunctionName + FailureType=DatabaseConnectionFailure dimensions as RetryEvents,
+    so dashboards and alarms can filter it the same way."""
+    put_dashboard_metric(
+        "DatabaseConnectionFailures",
+        dimensions=[
+            {"Name": "FunctionName", "Value": FUNCTION_NAME},
+            {"Name": "FailureType", "Value": "DatabaseConnectionFailure"},
+        ],
+    )
+
+
 def lambda_handler(event, context):
     conn = None
     cur = None
-    current_partner_name = None
+    # Partner context for CRUD failure metrics. Set to the partner_id BEFORE each
+    # partner's queries. It stays None for the Step 1 query, which reads all partners
+    # (no single partner), so that failure is published as PartnerId="Unknown" + "All".
+    current_partner_id = None
+    # Set ONLY when get_conn() itself fails. "conn is None" is not used for this,
+    # because conn is also None for failures that happen before get_conn() runs.
+    connection_failed = False
     track_crud(None)
 
     try:
         current_time = datetime.now(timezone.utc)
 
-        conn = get_conn()
+        try:
+            conn = get_conn()
+        except Exception:
+            connection_failed = True
+            raise
         cur = conn.cursor()
 
         logger.info("Connected to database successfully")
@@ -217,6 +280,7 @@ def lambda_handler(event, context):
         """)
 
         schedule_rows = cur.fetchall()
+        track_crud(None)  # Read succeeded
         logger.info("Found %s partner schedule rows", len(schedule_rows))
 
         # =========================
@@ -230,6 +294,9 @@ def lambda_handler(event, context):
             partner_name
         ) in schedule_rows:
 
+            # Set the partner context first, before any query for this partner
+            current_partner_id = partner_id
+
             logger.info(
                 "Processing partner_id=%s partner_name=%s",
                 partner_id,
@@ -238,8 +305,6 @@ def lambda_handler(event, context):
 
             if partner_name is None:
                 partner_name = partner_id
-
-            current_partner_name = partner_name
 
             # =========================
             # Step 3: Get last payload timestamp
@@ -252,6 +317,7 @@ def lambda_handler(event, context):
             """, (partner_id,))
 
             transmission_row = cur.fetchone()
+            track_crud(None)  # Read succeeded
 
             if not transmission_row:
                 logger.info("No transmission row found for partner_id=%s", partner_id)
@@ -354,7 +420,7 @@ def lambda_handler(event, context):
                         Subject=subject,
                         Message=message
                     )
-                    
+
                     track_crud("Update")
                     cur.execute("""
                         UPDATE partner_schedule
@@ -362,7 +428,8 @@ def lambda_handler(event, context):
                             last_breach_email_sent_at = %s
                         WHERE partner_id = %s
                     """, (current_time, partner_id))
-                    conn.commit()
+                    track_crud(None)  # Update succeeded
+                    commit_tracked(conn)
 
                     logger.info(
                         "Updated breach_flag=TRUE and last_breach_email_sent_at for partner_id=%s",
@@ -378,7 +445,8 @@ def lambda_handler(event, context):
                             SET breach_flag = TRUE
                             WHERE partner_id = %s
                         """, (partner_id,))
-                        conn.commit()
+                        track_crud(None)  # Update succeeded
+                        commit_tracked(conn)
 
                         logger.info(
                             "Updated breach_flag=TRUE without SNS for partner_id=%s",
@@ -399,7 +467,8 @@ def lambda_handler(event, context):
                         SET breach_flag = FALSE
                         WHERE partner_id = %s
                     """, (partner_id,))
-                    conn.commit()
+                    track_crud(None)  # Update succeeded
+                    commit_tracked(conn)
 
                     logger.info(
                         "Recovered partner_id=%s and reset breach_flag=FALSE",
@@ -416,13 +485,16 @@ def lambda_handler(event, context):
     except Exception as e:
         logger.exception("Lambda execution failed")
 
-        if conn is None:
-            put_dashboard_metric("DatabaseConnectionFailures")
-        elif isinstance(e, pg8000.Error) and _last_crud_operation:
-            put_crud_failure_metrics(_last_crud_operation, current_partner_name)
+        if connection_failed:
+            publish_db_connection_exhausted()
+        elif isinstance(e, CRUD_ERROR_TYPES) and _last_crud_operation:
+            put_crud_failure_metrics(_last_crud_operation, current_partner_id)
 
         if conn:
-            conn.rollback()
+            try:
+                conn.rollback()  # not tracked: a rollback error is never reported as a CRUD step
+            except Exception as rollback_error:
+                logger.warning("Rollback failed: %s", str(rollback_error))
 
         return {
             "statusCode": 500,
@@ -430,6 +502,7 @@ def lambda_handler(event, context):
         }
 
     finally:
+        track_crud(None)  # reset for the next invocation (warm Lambda reuses globals)
         if cur:
             cur.close()
         if conn:
