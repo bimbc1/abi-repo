@@ -59,6 +59,7 @@ DB_NAME             = os.environ.get("DB_NAME", "ccda01")
 INGESTION_METHOD    = os.environ.get("INGESTION_METHOD", "DIRECT_S3")
 FUNCTION_NAME       = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
 DASHBOARD_NAME      = os.environ.get("DASHBOARD_NAME")
+METRIC_NAMESPACE    = os.environ["METRIC_NAMESPACE"]
 _dropdown_checked   = {"at": None}
     # --AWS CLIENTS---
 s3 = boto3.client("s3")
@@ -79,7 +80,7 @@ def invoke_retry_handler(error, event):
         failure_type = "OtherFailure"
         # ---PUTTING METRIC FOR RETRY---
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name=retry_metric_name,
         value=1
     )
@@ -91,7 +92,7 @@ def invoke_retry_handler(error, event):
     except Exception as e:
         logger.error(f"Retry handler invocation failed: {e}")
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="RetryHandlerInvocationFailures",
             value=1
         )
@@ -357,7 +358,7 @@ def _publish_operational_alert(subject, message, failure_category):
             },
         )
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="SNSNotificationsSent",
             value=1
         )
@@ -368,7 +369,7 @@ def _publish_operational_alert(subject, message, failure_category):
             failure_category,
         )
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="ActiveIncidents",
             value=1,
             dimensions=[{"Name": "FailureCategory", "Value": failure_category}]
@@ -489,7 +490,7 @@ def get_conn(publish_failure_metric=True):
         logging.exception("Unable to connect to the database: %s", str(error))
         if publish_failure_metric:
             put_metric(
-                namespace="HIE/OperationalMonitoring",
+                namespace=METRIC_NAMESPACE,
                 metric_name="DatabaseConnectionFailures",
                 value=1
             )
@@ -641,14 +642,14 @@ def publish_transfer_family_file_in(bucket, key, partner_id):
             "Transfer Family user not found for s3://%s/%s (not uploaded through Transfer Family, "
             "or its log line is delayed).", bucket, key
         )
-        put_partner_metric("HIE/OperationalMonitoring", "TransferFamilyUserNotFound", partner_id, 1)
+        put_partner_metric(METRIC_NAMESPACE, "TransferFamilyUserNotFound", partner_id, 1)
         return None
     logger.info(
         "Transfer Family user %s -> partner %s | partner_id=%s | bucket=%s | file=%s",
         user, _bucket_partner_names.get(bucket), partner_id, bucket, key
     )
     put_partner_metric(
-        "HIE/OperationalMonitoring", "PartnerTransferFilesIn", partner_id, 1,
+        METRIC_NAMESPACE, "PartnerTransferFilesIn", partner_id, 1,
         extra_dimensions=[{"Name": "TransferUser", "Value": user}]
     )
     return user
@@ -759,7 +760,7 @@ def handle_transfer_upload_failure(message, log_stream):
             user, _bucket_partner_names.get(bucket), partner_id, path
         )
     put_partner_metric(
-        "HIE/OperationalMonitoring", "PartnerUploadFailures", partner_id, 1,
+        METRIC_NAMESPACE, "PartnerUploadFailures", partner_id, 1,
         extra_dimensions=[{"Name": "TransferUser", "Value": user}]
     )
     return True
@@ -808,7 +809,7 @@ def handle_transfer_login_failures(event):
                 user, _bucket_partner_names.get(bucket), partner_id, bucket
             )
         put_partner_metric(
-            "HIE/OperationalMonitoring", "PartnerLoginFailures", partner_id, 1,
+            METRIC_NAMESPACE, "PartnerLoginFailures", partner_id, 1,
             extra_dimensions=[{"Name": "TransferUser", "Value": user}]
         )
         counted += 1
@@ -1140,7 +1141,7 @@ def send_recovery_sns(partner_name, partner_id, environment):
             Message=message,
         )
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="SNSNotificationsSent",
             value=1
         )
@@ -1305,7 +1306,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
 
     if not zip_matches_manifest:
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="CountMismatchEvents",
             value=1
         )
@@ -1368,7 +1369,7 @@ def build_patient_report_metadata_message(bucket, trigger_key, batch_id, batch_t
     validation_status = "READY_FOR_DATABASE_SQS_INSERT" if report_matches_manifest else "COUNT_MISMATCH"
     if not report_matches_manifest:
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="CountMismatchEvents",
             value=1
         )
@@ -1460,7 +1461,7 @@ def sync_partner_state_and_breach_flag(bucket, batch_id, manifest_meta, report_m
         if conn:
             conn.rollback()
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="CRUDFailures",
             value=1
         )
@@ -1567,7 +1568,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
             filename
         )
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="UnrecognizedBatchTypeEvents",
             value=1
         )
@@ -1662,7 +1663,7 @@ def send_metadata_to_sqs(message):
         )
         raise SQSPublishError("Manifest processing failed due to SQS publish error.") from error
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="MetadataMessageTypesSentToSQS",
         value=1,
         dimensions=[{"Name": "MessageType", "Value": message["message_type"]}]
@@ -1731,14 +1732,14 @@ def put_failure_metric(metric_name, failure_type=None, partner_id=None):
     if failure_type:
         dimensions.append({"Name": "FailureType", "Value": failure_type})
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name=metric_name,
         value=1,
         dimensions=dimensions
     )
     # ---CRUD FAILURES PER PARTNER ID (and "All") FOR THE DASHBOARD PARTNER DROPDOWN---
     if metric_name == "CRUDFailureEvents":
-        put_partner_metric("HIE/OperationalMonitoring", metric_name, partner_id, 1, extra_dimensions=dimensions)
+        put_partner_metric(METRIC_NAMESPACE, metric_name, partner_id, 1, extra_dimensions=dimensions)
     # ---MAIN OBJECT PROCESSOR---
 def process_object(bucket, key, record):
     filename = os.path.basename(key)
@@ -1748,7 +1749,7 @@ def process_object(bucket, key, record):
     processing_start = datetime.now(timezone.utc)
     processing_delay = (processing_start - event_time).total_seconds()
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="ProcessingDelaySeconds",
         value=processing_delay,
         unit="Seconds"
@@ -1758,14 +1759,14 @@ def process_object(bucket, key, record):
         logger.info("Skipping non-target file: %s", filename)
         return {"processed": False, "reason": "NON_TARGET_FILE"}
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="S3ObjectArrivals",
         value=1
     )
     # ---S3 OBJECT ARRIVALS PER PARTNER ID + "All"---
     get_partner_name_for_bucket(bucket)
     arrival_partner_id = _bucket_partner_ids.get(bucket)
-    put_partner_metric("HIE/OperationalMonitoring", "S3ObjectArrivals", arrival_partner_id, 1)
+    put_partner_metric(METRIC_NAMESPACE, "S3ObjectArrivals", arrival_partner_id, 1)
     # ---TRANSFER FAMILY USER -> PARTNER, FILES IN PER PARTNER ID + "All"---
     publish_transfer_family_file_in(bucket, key, arrival_partner_id)
     # ---REGISTERED PARTNERS ("All" = number of partners, each partner = 1) FOR EXPECTED FILES---
@@ -1773,7 +1774,7 @@ def process_object(bucket, key, record):
     for _pid, _value in ((arrival_partner_id, 1), ("All", registered_partner_count)):
         if _pid is not None and _value:
             put_metric(
-                namespace="HIE/OperationalMonitoring",
+                namespace=METRIC_NAMESPACE,
                 metric_name="RegisteredPartners",
                 value=_value,
                 dimensions=[{"Name": "PartnerId", "Value": str(_pid)}]
@@ -1794,12 +1795,12 @@ def process_object(bucket, key, record):
     else:
         logger.info("Batch %s | report message already sent, skipping duplicate send.", batch_id)
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="MetadataMessagesSentToSQS",
         value=1
     )
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="ArchiveStatus",
         value=1,
         dimensions=[
@@ -1823,7 +1824,7 @@ def lambda_handler(event, context):
     if not records:
         logger.info("No records found in event.")
         put_metric(
-            namespace="HIE/OperationalMonitoring",
+            namespace=METRIC_NAMESPACE,
             metric_name="ServiceAvailability",
             value=1,
             dimensions=[{"Name": "FunctionName", "Value": FUNCTION_NAME}]
@@ -1846,17 +1847,17 @@ def lambda_handler(event, context):
             error_message = str(e)
             if "AccessDenied" in error_message or "access denied" in error_message.lower():
                 put_metric(
-                    namespace="HIE/OperationalMonitoring",
+                    namespace=METRIC_NAMESPACE,
                     metric_name="AccessDeniedEvents",
                     value=1
                 )
             put_metric(
-                namespace="HIE/OperationalMonitoring",
+                namespace=METRIC_NAMESPACE,
                 metric_name="MetadataLambdaFailures",
                 value=1
             )
             put_metric(
-                namespace="HIE/OperationalMonitoring",
+                namespace=METRIC_NAMESPACE,
                 metric_name="ArchiveStatus",
                 value=0,
                 dimensions=[
@@ -1878,13 +1879,13 @@ def lambda_handler(event, context):
     update_partner_dropdown(event, context)
     publish_partner_expected_files()
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="Latency",
         value=(datetime.now(timezone.utc) - invocation_start).total_seconds(),
         unit="Seconds"
     )
     put_metric(
-        namespace="HIE/OperationalMonitoring",
+        namespace=METRIC_NAMESPACE,
         metric_name="ServiceAvailability",
         value=0 if retry_handler_failed else 1,
         dimensions=[{"Name": "FunctionName", "Value": FUNCTION_NAME}]
