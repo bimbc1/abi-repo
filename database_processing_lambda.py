@@ -205,6 +205,8 @@ def get_conn():
             retry_delay_seconds=1,
             return_bool=False
         )
+        username = creds["username"]
+        password = creds["password"]
     except Exception as e:
         _conn_failed_this_invocation = True
         put_metric("DatabaseConnectionSetupFailures")
@@ -217,8 +219,8 @@ def get_conn():
                 host=DB_HOST,
                 port=DB_PORT,
                 database=DB_NAME,
-                user=creds["username"],
-                password=creds["password"],
+                user=username,
+                password=password,
                 ssl_context=True,
                 timeout=5,
             )
