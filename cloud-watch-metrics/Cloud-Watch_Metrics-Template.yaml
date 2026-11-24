@@ -9,11 +9,14 @@ Metadata:
         Parameters:
           - Env
           - TransferServerId
+          - RdsInstanceIdentifier
     ParameterLabels:
       Env:
         default: Environment (dev / stg / prod)
       TransferServerId:
         default: Transfer Family server ID for this environment
+      RdsInstanceIdentifier:
+        default: RDS DB instance identifier for this environment
 
 Parameters:
   Env:
@@ -28,6 +31,13 @@ Parameters:
     AllowedPattern: '^s-[0-9a-f]{17}$'
     ConstraintDescription: Must be a Transfer Family server ID, e.g. s-0123456789abcdef0.
     Description: transfer family server id
+
+  RdsInstanceIdentifier:
+    Type: String
+    AllowedPattern: '^[a-zA-Z][a-zA-Z0-9-]{0,62}$'
+    ConstraintDescription: Must be an RDS DB instance identifier, e.g. project-hie-analytics-admin-registry-db-dev.
+    Description: RDS DB instance identifier used by the RDS alarms and the Database Health button.
+      It must match the real DB instance, or the RDS alarms get no data.
 
 Conditions:
   IsGovCloud: !Equals
@@ -344,7 +354,7 @@ Resources:
       MetricName: CPUUtilization
       Dimensions:
         - Name: DBInstanceIdentifier
-          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+          Value: !Ref RdsInstanceIdentifier
       Statistic: Average
       Period: 300
       EvaluationPeriods: 1
@@ -422,7 +432,7 @@ Resources:
       MetricName: DatabaseConnections
       Dimensions:
         - Name: DBInstanceIdentifier
-          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+          Value: !Ref RdsInstanceIdentifier
       Statistic: Maximum
       Period: 300
       EvaluationPeriods: 1
@@ -442,7 +452,7 @@ Resources:
       MetricName: FreeStorageSpace
       Dimensions:
         - Name: DBInstanceIdentifier
-          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+          Value: !Ref RdsInstanceIdentifier
       Statistic: Minimum
       Period: 300
       EvaluationPeriods: 1
@@ -462,7 +472,7 @@ Resources:
       MetricName: FreeableMemory
       Dimensions:
         - Name: DBInstanceIdentifier
-          Value: !Sub project-hie-analytics-admin-registry-db-${Env}
+          Value: !Ref RdsInstanceIdentifier
       Statistic: Minimum
       Period: 300
       EvaluationPeriods: 1
@@ -480,6 +490,33 @@ Resources:
       AlarmDescription: Fires when the Manifest Metadata Lambda fails to send an alert or recovery email through SNS.
       Namespace: HIE/OperationalMonitoring
       MetricName: SNSPublishFailures
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+      AlarmActions:
+        - !ImportValue
+          Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
+
+  SQSPublishFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ManifestMetadata-SQSPublishFailures-${Env}
+      AlarmDescription: Fires when the Manifest Metadata Lambda fails to send a message to SQS.
+      Namespace: HIE/OperationalMonitoring
+      MetricName: RetryEvents
+      Dimensions:
+        - Name: FunctionName
+          Value: !Select
+            - 6
+            - !Split
+              - ':'
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
+        - Name: FailureType
+          Value: SQSPublishFailure
       Statistic: Sum
       Period: 300
       EvaluationPeriods: 1
@@ -539,8 +576,10 @@ Resources:
         - !ImportValue
           Fn::Sub: project-hie-analytics-ingestion-failure-alerts-sns-topic-arn-${Env}
 
-  # Login failures per partner: every AUTH_FAILURE line is sent to the Manifest
-  # Metadata Lambda, which finds the user's partner and publishes PartnerLoginFailures.
+  # Login and upload failures per partner: every AUTH_FAILURE and PARTIAL_CLOSE line is
+  # sent to the Manifest Metadata Lambda, which finds the partner and publishes
+  # PartnerLoginFailures (AUTH_FAILURE) or PartnerUploadFailures (PARTIAL_CLOSE).
+  # One subscription filter handles both (a log group allows only 2 subscription filters).
   TransferLoginFailuresLambdaPermission:
     Type: AWS::Lambda::Permission
     Properties:
@@ -556,7 +595,7 @@ Resources:
     DependsOn: TransferLoginFailuresLambdaPermission
     Properties:
       LogGroupName: !Sub /aws/transfer/${TransferServerId}
-      FilterPattern: '"AUTH_FAILURE"'
+      FilterPattern: '?"AUTH_FAILURE" ?"PARTIAL_CLOSE"'
       DestinationArn: !ImportValue
         Fn::Sub: project-hie-analytics-process-payload-manifest-lambda-arn-${Env}
 
@@ -645,6 +684,7 @@ Resources:
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeStorageSpace-${Env}",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:RDS-FreeableMemory-${Env}",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SNSPublishFailures-${Env}",
+                    "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:ManifestMetadata-SQSPublishFailures-${Env}",
                     "arn:${AWS::Partition}:cloudwatch:${AWS::Region}:${AWS::AccountId}:alarm:DatabaseProcessor-MetricPublishFailures-${Env}"
                   ]
                 }
@@ -666,7 +706,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "Transfer family user:Files in",
+                  "title": "Files received vs expected (Transfer Family)",
                   "region": "${AWS::Region}",
                   "view": "singleValue",
                   "stat": "Sum",
@@ -705,15 +745,33 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "t * 0 + MAX(RUNNING_SUM(tfiles))",
+                        "expression": "t * SUM(tfiles)",
                         "id": "totrecv",
+                        "label": "Files received in the selected time range",
                         "visible": false
                       }
                     ],
                     [
                       {
-                        "expression": "t * MAX(SUM(ex)) * PERIOD(t) / 1800",
+                        "expression": "t * MAX(SUM(ex))",
+                        "id": "rate30",
+                        "label": "Expected files per 30 minutes",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "t * SUM(t) * PERIOD(t) / 1800",
+                        "id": "windows",
+                        "label": "Number of 30-minute windows in the selected time range",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "rate30 * windows",
                         "id": "totexp",
+                        "label": "Files expected in the selected time range",
                         "visible": false
                       }
                     ],
@@ -759,9 +817,16 @@ Resources:
                   "setPeriodToTimeRange": true,
                   "metrics": [
                     [
-                      "HIE/OperationalMonitoring",
-                      "UploadFailures",
                       {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,PartnerId,TransferUser} MetricName=\"PartnerUploadFailures\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "uf1",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "FILL(SUM(uf1), 0)",
+                        "id": "uf2",
                         "label": "Upload failures",
                         "color": "#d13212"
                       }
@@ -818,7 +883,7 @@ Resources:
                 "width": 16,
                 "height": 6,
                 "properties": {
-                  "title": "Partner login failures - by partner",
+                  "title": "Partner login failures - by Transfer Family user",
                   "region": "${AWS::Region}",
                   "metrics": [
                     [
@@ -849,7 +914,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Database Health (select a partner, or All, from the Partner dropdown at the top)"
+                  "markdown": "## Database Health (CRUD failures: select a partner, or All, from the Partner dropdown at the top. RDS database metrics: whole database, not filtered by the Partner dropdown)"
                 }
               },
               {
@@ -1118,7 +1183,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Workflow Health"
+                  "markdown": "## Workflow Health (all partners, not filtered by the Partner dropdown)"
                 }
               },
               {
@@ -1137,7 +1202,7 @@ Resources:
                   "yAxis": {
                     "left": {
                       "min": 0,
-                      "max": 10
+                      "max": 25
                     }
                   },
                   "metrics": [
@@ -1172,7 +1237,7 @@ Resources:
                   "yAxis": {
                     "left": {
                       "min": 0,
-                      "max": 10
+                      "max": 25
                     }
                   },
                   "metrics": [
@@ -1207,7 +1272,7 @@ Resources:
                   "yAxis": {
                     "left": {
                       "min": 0,
-                      "max": 10
+                      "max": 25
                     }
                   },
                   "metrics": [
@@ -1242,7 +1307,7 @@ Resources:
                   "yAxis": {
                     "left": {
                       "min": 0,
-                      "max": 10
+                      "max": 25
                     }
                   },
                   "metrics": [
@@ -1290,7 +1355,7 @@ Resources:
                 "width": 8,
                 "height": 6,
                 "properties": {
-                  "title": "SQS Publishing Failures - Manifest Metadata Lambda",
+                  "title": "SQS Publish Failures - Manifest Metadata Lambda",
                   "region": "${AWS::Region}",
                   "view": "gauge",
                   "stat": "Sum",
@@ -1299,7 +1364,7 @@ Resources:
                   "yAxis": {
                     "left": {
                       "min": 0,
-                      "max": 10
+                      "max": 25
                     }
                   },
                   "metrics": [
@@ -1312,6 +1377,37 @@ Resources:
                       "SQSPublishFailure",
                       {
                         "label": "SQS publish",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 0,
+                "y": 48,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "SNS Publish Failures - Manifest Metadata Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 25
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "SNSPublishFailures",
+                      {
+                        "label": "SNS publish",
                         "color": "#d13212"
                       }
                     ]
@@ -1345,7 +1441,7 @@ Resources:
                 "width": 24,
                 "height": 1,
                 "properties": {
-                  "markdown": "## Storage & Processing"
+                  "markdown": "## Storage & Processing (S3ObjectArrivals: select a partner, or All, from the Partner dropdown at the top. ProcessingDelaySeconds: all partners, not filtered by the Partner dropdown)"
                 }
               },
               {
@@ -1389,7 +1485,7 @@ Resources:
                   "region": "${AWS::Region}",
                   "view": "singleValue",
                   "period": 300,
-                  "stat": "Average",
+                  "stat": "Maximum",
                   "metrics": [
                     [
                       "HIE/OperationalMonitoring",
@@ -1530,7 +1626,7 @@ Resources:
                 - '[button:primary:${Label}
                   (${Db})](https://${Host}/cloudwatch/home?region=${AWS::Region}#metricsV2:graph=~%28view~''timeSeries~stacked~false~region~''${AWS::Region}~stat~''Average~period~300~title~''${Db}~metrics~%28~%28~''AWS*2fRDS~''CPUUtilization~''DBInstanceIdentifier~''${Db}%29~%28~''.~''FreeableMemory~''.~''.~%28yAxis~''right%29%29~%28~''.~''FreeStorageSpace~''.~''.~%28yAxis~''right%29%29%29%29)'
                 - Label: RDS Database
-                  Db: !Sub project-hie-analytics-admin-registry-db-${Env}
+                  Db: !Ref RdsInstanceIdentifier
                   Host: !If
                     - IsGovCloud
                     - console.amazonaws-us-gov.com
