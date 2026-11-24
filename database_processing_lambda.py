@@ -1,8 +1,6 @@
 import os
 import json
 import logging
-import ssl
-from contextlib import contextmanager
 from datetime import datetime, timezone
 import boto3
 import pg8000
@@ -90,70 +88,48 @@ def put_dashboard_metric(metric_name, value=1, dimensions=None):
 
 
 def put_crud_failure_metrics(failure_type, partner_id):
-    """Publish CRUDFailureEvents for the partner, using the PartnerId dimension that the
-    dashboard CRUD widgets query (the Partner dropdown value is the partner_id).
-    A missing partner is published as "Unknown".
-
-    Exactly two datapoints per failure, with no partner-less datapoint:
-      1. PartnerId=<partner_id>  -> the partner-level datapoint
-      2. PartnerId="All"         -> an AGGREGATE copy, used only when "All" is selected
-                                    in the dashboard Partner dropdown.
-    The widgets filter on one exact PartnerId value (a partner OR "All"), never on both,
-    so a failure is counted once in every view. Do not SUM across all PartnerId values:
-    that would count each failure twice."""
-    partner = str(partner_id).strip() if partner_id not in (None, "") else ""
-    partner = partner or "Unknown"
-    base_dimensions = [
+    """Publish CRUDFailureEvents with the PartnerId dimension the dashboard CRUD widgets
+    query (the Partner dropdown value is the partner_id). Exactly two datapoints:
+      1. PartnerId=<partner_id> (or "Unknown")  -> the partner-level datapoint
+      2. PartnerId="All"                        -> an AGGREGATE copy for the "All" option
+    The widgets filter on one exact PartnerId value, so each failure is counted once.
+    Do not SUM across all PartnerId values: that would count each failure twice."""
+    partner = str(partner_id) if partner_id not in (None, "") else "Unknown"  # "Unknown" fallback
+    dimensions = [
         {"Name": "FunctionName", "Value": FUNCTION_NAME},
         {"Name": "FailureType", "Value": failure_type},
     ]
-    for pid in (partner, "All"):  # partner-level datapoint + "All" aggregate
+    for pid in (partner, "All"):                                               # only 2 copies: partner + All
         put_dashboard_metric(
             "CRUDFailureEvents",
-            dimensions=base_dimensions + [{"Name": "PartnerId", "Value": pid}],
+            dimensions=dimensions + [{"Name": "PartnerId", "Value": pid}],
         )
     logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=%s (+ All aggregate)", failure_type, partner)
 
 
 # ---- CRUD OPERATION TRACKING ----
-# The failed operation is carried ON THE EXCEPTION, set at the failure point by
-# crud_step(). There is no shared/global state, so a retry cannot reset or lose it.
-@contextmanager
-def crud_step(operation):
-    """Wrap one database step (Read / Create / Commit). If it raises, the exception is
-    tagged with exception.crud_operation = operation and re-raised unchanged."""
-    try:
-        yield
-    except Exception as e:
-        if getattr(e, "crud_operation", None) is None:
-            try:
-                e.crud_operation = operation
-            except Exception:  # exception types that do not allow new attributes
-                pass
-        raise
+_last_crud_operation = None
+
+
+def track_crud(operation):
+    global _last_crud_operation
+    _last_crud_operation = operation
 
 _DB_ERROR_TYPES = tuple(
-    t for t in (
-        getattr(getattr(pg8000, "exceptions", None), "DatabaseError", None),
-        getattr(pg8000, "DatabaseError", None),  # fallback for pg8000 versions without pg8000.exceptions
-    ) if t
+    t for t in (getattr(getattr(pg8000, "exceptions", None), "DatabaseError", None),) if t
 )
 
 
 def classify_failure(e, operation=None):
-    """Return the CRUD FailureType for an error raised while writing a message.
-    The operation is read from the exception (set by crud_step) unless passed in.
-    Every non-connection error gets a label, so a failed query never publishes nothing.
-
-      * Connection errors           -> None (reported as RetryEvents/DatabaseConnectionFailure instead)
-      * Any error during a tracked
-        step (Read/Create/Commit)   -> that step
-      * pg8000 DatabaseError with
-        no tracked step             -> "Other"
-      * ValueError with no tracked
-        step (bad/missing data)     -> "Validation"
-      * Any other error             -> "Other"
-    """
+    """Return the CRUD FailureType for a failed write. Every non-connection error gets a
+    label, so a failed query never publishes nothing:
+      * connection error                       -> None (counted as RetryEvents instead)
+      * error during a tracked step            -> that step (Read / Create / Commit)
+      * pg8000 DatabaseError, no tracked step  -> "Other"
+      * ValueError, no tracked step (bad data) -> "Validation"
+      * any other error                        -> "Other"
+    The step is read from the exception (e.crud_operation, set at the failure point)
+    unless passed in."""
     if is_connection_error(e):
         return None
     operation = operation or getattr(e, "crud_operation", None)
@@ -166,17 +142,15 @@ def classify_failure(e, operation=None):
     return "Other"
 
 
-class MessageProcessingError(Exception):
-    """Raised when a message fails after all retries.
+def reset_failure_tracking():
+    global _last_crud_operation
+    _last_crud_operation = None
 
-    crud_failure_type: the FailureType published for this message (the most recent CRUD
-                       failure across all attempts), or None if no CRUD query failed
-                       (e.g. only connection failures).
-    crud_failures:     every CRUD failure seen across the attempts, in order (for logs)."""
-    def __init__(self, message, crud_failure_type=None, crud_failures=None):
+
+class MessageProcessingError(Exception):
+    def __init__(self, message, crud_failure_type=None):
         super().__init__(message)
         self.crud_failure_type = crud_failure_type
-        self.crud_failures = list(crud_failures or [])
 
 # ---- DATABASE CONNECTION FAILURES (dashboard "Failed Database Connections" + alarm) ----
 class DatabaseConnectionError(Exception):
@@ -184,9 +158,7 @@ class DatabaseConnectionError(Exception):
 
 
 class ConnectionSetupError(DatabaseConnectionError):
-    """A setup step failed BEFORE any connection attempt: Secrets Manager, the secret's
-    JSON, or the SSL context / CA bundle. Reported as DatabaseConnectionSetupFailures,
-    never as RetryEvents / DatabaseConnectionFailure."""
+    """Secrets Manager or the secret's JSON failed before connecting."""
 
 
 _CONNECTION_ERROR_TYPES = tuple(
@@ -224,38 +196,8 @@ def load_connection_settings():
     return creds
 
 
-def build_ssl_context():
-    """Create the SSL context for the database connection.
-
-    This is built here, BEFORE connecting, so an SSL / CA bundle error is a setup
-    failure and not a connection failure. It matches what pg8000 builds for
-    ssl_context=True: the connection is encrypted, and the server certificate is
-    not verified (check_hostname=False, CERT_NONE)."""
-    context = ssl.create_default_context()
-    context.check_hostname = False
-    context.verify_mode = ssl.CERT_NONE
-    return context
-
-
-def _connection_setup_failed(step, error):
-    """A setup step failed before connecting: separate metric, no RetryEvents."""
-    global _conn_failed_this_invocation
-    _conn_failed_this_invocation = True
-    put_metric("DatabaseConnectionSetupFailures")
-    logger.error("DB connection setup failed (%s): %s", step, str(error))
-    return ConnectionSetupError(f"Database connection setup failed: {step}")
-
-
 def get_conn():
-    """Open a database connection.
-
-    RetryEvents (FailureType=DatabaseConnectionFailure) is published ONLY around the
-    pg8000.connect call, once per failed connection attempt (AC2). The setup steps
-    before it (Secrets Manager, secret JSON, SSL context) report
-    DatabaseConnectionSetupFailures instead."""
     global _conn_failed_this_invocation
-
-    # ---- SETUP 1: credentials (Secrets Manager + secret JSON) ----
     try:
         creds = retry_with_backoff(
             operation=load_connection_settings,
@@ -263,27 +205,21 @@ def get_conn():
             retry_delay_seconds=1,
             return_bool=False
         )
-        username = creds["username"]
-        password = creds["password"]
     except Exception as e:
-        raise _connection_setup_failed("Secrets Manager or secret JSON", e) from e
+        _conn_failed_this_invocation = True
+        put_metric("DatabaseConnectionSetupFailures")
+        logger.error("DB connection setup failed (Secrets Manager or secret JSON): %s", str(e))
+        raise ConnectionSetupError("Failed to load database credentials") from e
 
-    # ---- SETUP 2: SSL context / CA bundle ----
-    try:
-        ssl_context = build_ssl_context()
-    except Exception as e:
-        raise _connection_setup_failed("SSL context / CA bundle", e) from e
-
-    # ---- CONNECTION ATTEMPT: the only place RetryEvents is published ----
     def connect():
         try:
             return pg8000.connect(
                 host=DB_HOST,
                 port=DB_PORT,
                 database=DB_NAME,
-                user=username,
-                password=password,
-                ssl_context=ssl_context,
+                user=creds["username"],
+                password=creds["password"],
+                ssl_context=True,
                 timeout=5,
             )
         except Exception as e:
@@ -330,9 +266,9 @@ def drop_conn():
 def handle_db_write_failure(e):
     """Called for every failed write attempt. A lost connection is reported as a
     database connection failure (and the connection is reopened on the next attempt);
-    any other error is recorded as a CRUD failure (see classify_failure for the labels)."""
+    any other database error is recorded as a CRUD failure (Create / Read / Update)."""
     if is_connection_error(e):
-        # not a CRUD failure
+        reset_failure_tracking()          # not a CRUD failure
         if not isinstance(e, DatabaseConnectionError):
             # connection was open and then lost; get_conn() already reports its own failures
             logger.warning("DB connection lost during write: %s", str(e))
@@ -356,38 +292,32 @@ def handle_db_write_failure(e):
 def run_with_retries(message_type, write, message):
     """Write one message, retrying up to 3 times.
 
-    COUNTING RULE (agreed with the team): CRUDFailureEvents is counted PER MESSAGE,
-    not per failed query. A message that fails after all retries publishes exactly one
-    CRUD failure, labelled with the most recent CRUD failure seen across its attempts.
-    This matches ProcessingFailed and the DLQ, and retries do not inflate the count.
-    Every failed attempt is still logged; connection failures are counted in RetryEvents.
+    COUNTING RULE: CRUDFailureEvents is counted PER MESSAGE, not per failed query. A
+    message that fails after all retries publishes one CRUD failure, labelled with the
+    most recent CRUD failure seen across its attempts (the same unit as ProcessingFailed
+    and the DLQ). Every failed attempt is still logged.
 
-    Each attempt's CRUD failure is recorded here, in this message's own list, at the
-    failure point. So a later connection failure, or retry_with_backoff raising a
-    different exception, cannot lose an earlier CRUD failure."""
-    crud_failures = []
+    The failed step is carried ON THE EXCEPTION at the failure point, and kept here per
+    message, so a later connection failure or a different exception raised by
+    retry_with_backoff cannot lose an earlier CRUD failure."""
+    last_failure = {"type": None}
 
     def run():
+        reset_failure_tracking()
         try:
             ensure_conn()
             write(message)
         except Exception as e:
+            # Carry the step that was running on the exception itself
+            if getattr(e, "crud_operation", None) is None and _last_crud_operation:
+                try:
+                    e.crud_operation = _last_crud_operation
+                except Exception:  # exception types that do not allow new attributes
+                    pass
             failure_type = handle_db_write_failure(e)
-            if failure_type:
-                crud_failures.append(failure_type)
+            if failure_type:  # a later connection failure never clears an earlier CRUD failure
+                last_failure["type"] = failure_type
             raise
-
-    def failed(cause=None):
-        # Prefer what was recorded at the failure points; fall back to a type carried
-        # on whatever exception retry_with_backoff raised.
-        failure_type = crud_failures[-1] if crud_failures else getattr(cause, "crud_failure_type", None)
-        if crud_failures:
-            logger.info("CRUD failures across attempts for message_type=%s: %s", message_type, crud_failures)
-        return MessageProcessingError(
-            f"Failed to process message_type: {message_type} after all retries",
-            failure_type,
-            crud_failures,
-        )
 
     try:
         result = retry_with_backoff(
@@ -397,10 +327,16 @@ def run_with_retries(message_type, write, message):
             return_bool=True
         )
     except Exception as e:
-        raise failed(e) from e
+        raise MessageProcessingError(
+            f"Failed to process message_type: {message_type} after all retries",
+            last_failure["type"] or getattr(e, "crud_failure_type", None),
+        ) from e
 
     if result is False:
-        raise failed()
+        raise MessageProcessingError(
+            f"Failed to process message_type: {message_type} after all retries",
+            last_failure["type"],
+        )
 
 
 def process_message(message):
@@ -446,36 +382,38 @@ def upsert_manifest_metadata(message):
     cur = conn.cursor()
 
     # ---- CHECK IF manifest_batch ROW EXISTS ----
-    with crud_step("Read"):
-        cur.execute(
-            """
-            SELECT COUNT(*) FROM manifest_batch
-            WHERE partner_id = %s
-            AND batch_id = %s
-            AND file_name = %s
-            """,
-            (partner_id, batch_id, file_name),
-        )
-        row = cur.fetchone()
+    track_crud("Read")
+    cur.execute(
+        """
+        SELECT COUNT(*) FROM manifest_batch
+        WHERE partner_id = %s
+        AND batch_id = %s
+        AND file_name = %s
+        """,
+        (partner_id, batch_id, file_name),
+    )
+    row = cur.fetchone()
+    track_crud(None)
 
     if row[0] > 0:
         logger.info("manifest_batch row already exists for batch_id=%s file_name=%s skipping",
                     batch_id, file_name)
     else:
-        with crud_step("Create"):
-            cur.execute(
-                """
-                INSERT INTO manifest_batch (
-                    partner_id, batch_id, partner_batch_key,
-                    manifest_file_count, actual_file_count, count_discrepancy,
-                    submission_timestamp, created_at, updated_at,
-                    file_name, ingestion_method
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                """,
-                (partner_id, batch_id, str(partner_batch_key),
-                 expected, actual, discrepancy, now, now, now,
-                 file_name, ingestion_method),
-            )
+        track_crud("Create")
+        cur.execute(
+            """
+            INSERT INTO manifest_batch (
+                partner_id, batch_id, partner_batch_key,
+                manifest_file_count, actual_file_count, count_discrepancy,
+                submission_timestamp, created_at, updated_at,
+                file_name, ingestion_method
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            """,
+            (partner_id, batch_id, str(partner_batch_key),
+             expected, actual, discrepancy, now, now, now,
+             file_name, ingestion_method),
+        )
+        track_crud(None)
         logger.info("Inserted manifest_batch row for batch_id=%s", batch_id)
 
     rows = message.get("patient_received_report", {}).get("rows", [])
@@ -491,62 +429,64 @@ def upsert_manifest_metadata(message):
                 continue
 
             # ---- CHECK IF patient_details ROW EXISTS ----
-            with crud_step("Read"):
-                cur.execute(
-                    """
-                    SELECT COUNT(*) FROM patient_details
-                    WHERE partner_id = %s
-                    AND batch_id = %s
-                    AND edipi = %s
-                    AND file_name = %s
-                    """,
-                    (partner_id, batch_id, edipi_value, file_name),
-                )
-                row = cur.fetchone()
+            track_crud("Read")
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM patient_details
+                WHERE partner_id = %s
+                AND batch_id = %s
+                AND edipi = %s
+                AND file_name = %s
+                """,
+                (partner_id, batch_id, edipi_value, file_name),
+            )
+            row = cur.fetchone()
+            track_crud(None)
 
             if row[0] > 0:
                 skipped += 1
                 logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                             partner_id, batch_id, edipi_value, file_name)
             else:
-                with crud_step("Create"):
-                    cur.execute(
-                        """
-                        INSERT INTO patient_details (
-                            partner_id, batch_id, environment, file_name, edipi,
-                            patient_last_name, patient_first_name,
-                            date_of_receipt_utc, date_of_disclosure_utc,
-                            file_arrival_time_utc, sending_organization,
-                            purpose_of_use, purpose_of_use_code, user_role,
-                            document_format_code, document_loinc_code, document_id,
-                            repository_id, source_id, ccda_file_name,
-                            receiving_organization, partner,
-                            user_id, user_name, role, role_code, commonwell_indicator,ssn
-                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                        """,
-                        (partner_id, batch_id, environment, file_name, edipi_value,
-                         r.get("last_name"), r.get("first_name"),
-                         r.get("date_of_receipt"),
-                         r.get("disclosure_date"),
-                         arrival,
-                         r.get("sending_org"),
-                         r.get("purpose_of_use") or r.get("purpose"),
-                         r.get("purpose_of_use_code") or r.get("purpose_code"),
-                         r.get("user_role"),
-                         r.get("document_format_code"),
-                         r.get("document_loinc_code") or r.get("loinc_code"),
-                         r.get("document_id"),
-                         r.get("repository_id"),
-                         r.get("source_id"),
-                         r.get("ccda_file_name") or r.get("ccda_file"),
-                         r.get("receiving_organization") or r.get("receiving_org"),
-                         r.get("partner") or partner_name,
-                         r.get("user_id"),
-                         r.get("user_name"),
-                         r.get("role"), r.get("role_code"),
-                         r.get("commonwell_indicator"),
-                         r.get("ssn")),
-                    )
+                track_crud("Create")
+                cur.execute(
+                    """
+                    INSERT INTO patient_details (
+                        partner_id, batch_id, environment, file_name, edipi,
+                        patient_last_name, patient_first_name,
+                        date_of_receipt_utc, date_of_disclosure_utc,
+                        file_arrival_time_utc, sending_organization,
+                        purpose_of_use, purpose_of_use_code, user_role,
+                        document_format_code, document_loinc_code, document_id,
+                        repository_id, source_id, ccda_file_name,
+                        receiving_organization, partner,
+                        user_id, user_name, role, role_code, commonwell_indicator,ssn
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    """,
+                    (partner_id, batch_id, environment, file_name, edipi_value,
+                     r.get("last_name"), r.get("first_name"),
+                     r.get("date_of_receipt"),
+                     r.get("disclosure_date"),
+                     arrival,
+                     r.get("sending_org"),
+                     r.get("purpose_of_use") or r.get("purpose"),
+                     r.get("purpose_of_use_code") or r.get("purpose_code"),
+                     r.get("user_role"),
+                     r.get("document_format_code"),
+                     r.get("document_loinc_code") or r.get("loinc_code"),
+                     r.get("document_id"),
+                     r.get("repository_id"),
+                     r.get("source_id"),
+                     r.get("ccda_file_name") or r.get("ccda_file"),
+                     r.get("receiving_organization") or r.get("receiving_org"),
+                     r.get("partner") or partner_name,
+                     r.get("user_id"),
+                     r.get("user_name"),
+                     r.get("role"), r.get("role_code"),
+                     r.get("commonwell_indicator"),
+                     r.get("ssn")),
+                )
+                track_crud(None)
                 inserted += 1
 
         logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
@@ -554,8 +494,9 @@ def upsert_manifest_metadata(message):
     else:
         logger.info("No patient rows in message for batch_id=%s skipping patient_details", batch_id)
 
-    with crud_step("Commit"):
-        conn.commit()
+    track_crud("Commit")
+    conn.commit()
+    track_crud(None)
     logger.info("Processed manifest_batch for batch_id=%s", batch_id)
 
 
@@ -594,66 +535,69 @@ def upsert_patient_report_metadata(message):
             continue
 
         # ---- CHECK IF patient_details ROW EXISTS ----
-        with crud_step("Read"):
-            cur.execute(
-                """
-                SELECT COUNT(*) FROM patient_details
-                WHERE partner_id = %s
-                AND batch_id = %s
-                AND edipi = %s
-                AND file_name = %s
-                """,
-                (partner_id, batch_id, edipi_value, file_name),
-            )
-            row = cur.fetchone()
+        track_crud("Read")
+        cur.execute(
+            """
+            SELECT COUNT(*) FROM patient_details
+            WHERE partner_id = %s
+            AND batch_id = %s
+            AND edipi = %s
+            AND file_name = %s
+            """,
+            (partner_id, batch_id, edipi_value, file_name),
+        )
+        row = cur.fetchone()
+        track_crud(None)
 
         if row[0] > 0:
             skipped += 1
             logger.info("Row already exists for partner_id=%s batch_id=%s edipi=%s file_name=%s skipping",
                         partner_id, batch_id, edipi_value, file_name)
         else:
-            with crud_step("Create"):
-                cur.execute(
-                    """
-                    INSERT INTO patient_details (
-                        partner_id, batch_id, environment, file_name, edipi,
-                        patient_last_name, patient_first_name,
-                        date_of_receipt_utc, date_of_disclosure_utc,
-                        file_arrival_time_utc, sending_organization,
-                        purpose_of_use, purpose_of_use_code, user_role,
-                        document_format_code, document_loinc_code, document_id,
-                        repository_id, source_id, ccda_file_name,
-                        receiving_organization, partner,
-                        user_id, user_name, role, role_code, commonwell_indicator,direction
-                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                    """,
-                    (partner_id, batch_id, environment, file_name, edipi_value,
-                     r.get("last_name"), r.get("first_name"),
-                     r.get("date_of_receipt"),
-                     r.get("disclosure_date"),
-                     arrival,
-                     r.get("sending_org"),
-                     r.get("purpose_of_use") or r.get("purpose"),
-                     r.get("purpose_of_use_code") or r.get("purpose_code"),
-                     r.get("user_role"),
-                     r.get("document_format_code"),
-                     r.get("document_loinc_code") or r.get("loinc_code"),
-                     r.get("document_id"),
-                     r.get("repository_id"),
-                     r.get("source_id"),
-                     r.get("ccda_file_name") or r.get("ccda_file"),
-                     r.get("receiving_organization") or r.get("receiving_org"),
-                     r.get("partner") or partner_name,
-                     r.get("user_id"),
-                     r.get("user_name"),
-                     r.get("role"), r.get("role_code"),
-                     r.get("commonwell_indicator"),
-                     direction),         
-                )
+            track_crud("Create")
+            cur.execute(
+                """
+                INSERT INTO patient_details (
+                    partner_id, batch_id, environment, file_name, edipi,
+                    patient_last_name, patient_first_name,
+                    date_of_receipt_utc, date_of_disclosure_utc,
+                    file_arrival_time_utc, sending_organization,
+                    purpose_of_use, purpose_of_use_code, user_role,
+                    document_format_code, document_loinc_code, document_id,
+                    repository_id, source_id, ccda_file_name,
+                    receiving_organization, partner,
+                    user_id, user_name, role, role_code, commonwell_indicator,direction
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                """,
+                (partner_id, batch_id, environment, file_name, edipi_value,
+                 r.get("last_name"), r.get("first_name"),
+                 r.get("date_of_receipt"),
+                 r.get("disclosure_date"),
+                 arrival,
+                 r.get("sending_org"),
+                 r.get("purpose_of_use") or r.get("purpose"),
+                 r.get("purpose_of_use_code") or r.get("purpose_code"),
+                 r.get("user_role"),
+                 r.get("document_format_code"),
+                 r.get("document_loinc_code") or r.get("loinc_code"),
+                 r.get("document_id"),
+                 r.get("repository_id"),
+                 r.get("source_id"),
+                 r.get("ccda_file_name") or r.get("ccda_file"),
+                 r.get("receiving_organization") or r.get("receiving_org"),
+                 r.get("partner") or partner_name,
+                 r.get("user_id"),
+                 r.get("user_name"),
+                 r.get("role"), r.get("role_code"),
+                 r.get("commonwell_indicator"),
+                 direction),         
+            )
+            track_crud(None)
             inserted += 1
 
-    with crud_step("Commit"):
-        conn.commit()
+    track_crud("Commit")
+    conn.commit()
+    track_crud(None)
     logger.info("patient_details for batch_id=%s inserted=%d skipped=%d",
                 batch_id, inserted, skipped)
 
@@ -662,6 +606,7 @@ def upsert_patient_report_metadata(message):
 def handle_one_message(message_id, raw_body):
     """Returns True on success, False on failure. Never raises."""
     message = None
+    reset_failure_tracking()
 
     try:
         message = json.loads(raw_body)
@@ -718,13 +663,13 @@ def handle_one_message(message_id, raw_body):
         logger.error("failed msg=%s: %s", message_id, str(e))
         put_metric("LambdaProcessingFailures")
         failure_type = getattr(e, "crud_failure_type", None)
-        if failure_type:  # one CRUDFailureEvents per failed message (see run_with_retries)
+        if failure_type:
             partner_id = (
                 (message.get("partner") or {}).get("partner_id")
                 if isinstance(message, dict)
                 else None
             )
-            put_crud_failure_metrics(failure_type, partner_id)  # falls back to "Unknown"
+            put_crud_failure_metrics(failure_type, partner_id)
         return False
 
 
