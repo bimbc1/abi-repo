@@ -1,0 +1,365 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: HIE Analytics Lambda stack for database processing
+
+Parameters:
+  Env:
+    Type: String
+    Description: Environment to deploy into
+    AllowedValues:
+      - dev
+      - stg
+      - prod
+
+  DBSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing DB credentials
+
+  DBHost:
+    Type: String
+    Description: RDS endpoint hostname
+
+  DBName:
+    Type: String
+    Description: PostgreSQL database name
+
+  S3BName:
+    Type: String
+    Description: S3 Bucket name for Lambda Layers
+
+  LambdaCodeS3Key:
+    Type: String
+    Description: S3 key of the Lambda deployment zip
+
+  DBPort:
+    Type: Number
+    Default: 5432
+    Description: PostgreSQL database port
+
+  AlertEmail:
+    Type: String
+    Description: Email address to receive monitoring alarm notifications
+    Default: ""
+
+  ReservedConcurrency:
+    Type: Number
+    Default: 5
+    Description: Reserved concurrency for the Lambda function
+
+  EventSourceBatchSize:
+    Type: Number
+    Default: 5
+    Description: Number of SQS messages processed per Lambda invocation
+
+  LogRetentionDays:
+    Type: Number
+    Default: 90
+    Description: Number of days to retain Lambda logs in CloudWatch
+    AllowedValues:
+      - 1
+      - 7
+      - 14
+      - 30
+      - 60
+      - 90
+      - 180
+      - 365
+      - 731
+
+
+  MetricNamespace:
+    Type: String
+    Default: "HIE/OperationalMonitoring"
+    Description: CloudWatch namespace for database processing metrics
+
+  LambdaSubnetId1:
+    Type: AWS::EC2::Subnet::Id
+    Description: First subnet ID for the Lambda function
+
+  LambdaSubnetId2:
+    Type: AWS::EC2::Subnet::Id
+    Description: Second subnet ID for the Lambda function
+
+  LambdaSecurityGroupId:
+    Type: AWS::EC2::SecurityGroup::Id
+    Description: Security group ID for the Lambda function
+
+Conditions:
+  HasAlertEmail: !Not [!Equals [!Ref AlertEmail, ""]]
+
+Resources:
+
+  # ---- LAMBDA LAYER ----
+  Pg8000Layer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub project-hie-analytics-pg8000-${Env}
+      Description: pg8000 PostgreSQL driver layer
+      CompatibleRuntimes:
+        - python3.14
+      Content:
+        S3Bucket: !Ref S3BName
+        S3Key: pg8000-layer.zip
+
+  RetryBackoffLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub project-hie-analytics-retry-backoff-${Env}
+      Description: retry backoff layer
+      CompatibleRuntimes:
+        - python3.14
+      Content:
+        S3Bucket: !Ref S3BName
+        S3Key: project-hie-analytics-retry-backoff.zip
+
+  # ---- CLOUDWATCH LOG GROUP ----
+  LambdaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/project-hie-analytics-lambda-database-processing-${Env}
+      RetentionInDays: !Ref LogRetentionDays
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+        - Key: Environment
+          Value: !Ref Env
+
+  # ---- LAMBDA FUNCTION ----
+  MovePayloadLambda:
+    Type: AWS::Lambda::Function
+    DependsOn: LambdaLogGroup
+    Properties:
+      FunctionName: !Sub project-hie-analytics-lambda-database-processing-${Env}
+      Runtime: python3.14
+      Handler: database_processing_lambda.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: project-hie-analytics-partner-file-delivery-monitor-role-arn-${Env}
+      Timeout: 300
+      MemorySize: 256
+      ReservedConcurrentExecutions: !Ref ReservedConcurrency
+
+      Layers:
+        - !Ref Pg8000Layer
+        - !Ref RetryBackoffLayer
+
+      VpcConfig:
+        SubnetIds:
+          - !Ref LambdaSubnetId1
+          - !Ref LambdaSubnetId2
+        SecurityGroupIds:
+          - !Ref LambdaSecurityGroupId
+
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DBSecretArn
+          DB_HOST: !Ref DBHost
+          DB_NAME: !Ref DBName
+          DB_PORT: !Ref DBPort
+          ENVIRONMENT: !Ref Env
+          METRIC_NAMESPACE: !Ref MetricNamespace
+
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+        - Key: Environment
+          Value: !Ref Env
+
+      Code:
+        S3Bucket: !Ref S3BName
+        S3Key: !Ref LambdaCodeS3Key
+
+  # ---- SQS EVENT SOURCE MAPPING ----
+  DatabaseProcessorEventSourceMapping:
+    Type: AWS::Lambda::EventSourceMapping
+    DependsOn: MovePayloadLambda
+    Properties:
+      BatchSize: !Ref EventSourceBatchSize
+      EventSourceArn: !ImportValue
+        Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
+      FunctionName: !Ref MovePayloadLambda
+      Enabled: true
+      FunctionResponseTypes:
+        - ReportBatchItemFailures
+
+  # ---- SNS TOPIC FOR MONITORING ALERTS ----
+  MonitoringAlertSNSTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      TopicName: !Sub project-hie-analytics-database-processing-monitoring-${Env}
+      Tags:
+        - Key: tenant:CKID
+          Value: "2598"
+        - Key: tenant:VAECID
+          Value: "AWG20251201001"
+        - Key: va_vasi_id
+          Value: "2238"
+        - Key: Environment
+          Value: !Ref Env
+
+  # ---- EMAIL SUBSCRIPTION ----
+  MonitoringAlertEmailSubscription:
+    Type: AWS::SNS::Subscription
+    Condition: HasAlertEmail
+    Properties:
+      TopicArn: !Ref MonitoringAlertSNSTopic
+      Protocol: email
+      Endpoint: !Ref AlertEmail
+
+  # ---- MONITORING ALARM 1 ----
+  OldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub project-hie-analytics-database-processing-oldest-message-age-${Env}
+      AlarmDescription: Sends alert when oldest SQS message exceeds 1 hour
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions:
+        - Name: QueueName
+          Value: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-queue-name-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 3600
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref MonitoringAlertSNSTopic
+      TreatMissingData: notBreaching
+
+  # ---- MONITORING ALARM 2 ----
+  DLQMessageAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub project-hie-analytics-database-processing-dlq-messages-${Env}
+      AlarmDescription: Sends alert when messages appear in the Dead Letter Queue
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions:
+        - Name: QueueName
+          Value: !ImportValue
+            Fn::Sub: project-hie-analytics-database-processor-dlq-name-${Env}
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      AlarmActions:
+        - !Ref MonitoringAlertSNSTopic
+      TreatMissingData: notBreaching
+
+  # ---- MONITORING ALARM 3 ----
+  LambdaErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub project-hie-analytics-database-processing-lambda-errors-${Env}
+      AlarmDescription: Sends alert when Lambda function errors exceed threshold
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MovePayloadLambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MonitoringAlertSNSTopic
+      TreatMissingData: notBreaching
+
+  # ---- MONITORING ALARM 4 ----
+  LambdaThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub project-hie-analytics-database-processing-lambda-throttles-${Env}
+      AlarmDescription: Sends alert when Lambda function is throttled
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MovePayloadLambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MonitoringAlertSNSTopic
+      TreatMissingData: notBreaching
+
+  # ---- MONITORING ALARM 5 ----
+  DBConnectionFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub project-hie-analytics-database-processing-db-connection-failure-${Env}
+      AlarmDescription: Sends alert when Lambda fails to connect to PostgreSQL
+      Namespace: HIE/OperationalMonitoring
+      MetricName: DBConnectionFailure
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref MovePayloadLambda
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref MonitoringAlertSNSTopic
+      TreatMissingData: notBreaching
+
+Outputs:
+
+  LambdaFunctionArn:
+    Description: ARN of the database processor Lambda function
+    Value: !GetAtt MovePayloadLambda.Arn
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-lambda-arn-${Env}
+
+  LambdaLogGroupName:
+    Description: Name of the Lambda CloudWatch log group
+    Value: !Ref LambdaLogGroup
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-log-group-name-${Env}
+
+  MonitoringAlertSNSTopicArn:
+    Description: ARN of the SNS topic that sends monitoring alerts
+    Value: !Ref MonitoringAlertSNSTopic
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-monitoring-sns-topic-arn-${Env}
+
+  OldestMessageAgeAlarmArn:
+    Description: ARN of the oldest message age CloudWatch alarm
+    Value: !GetAtt OldestMessageAgeAlarm.Arn
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-oldest-message-age-alarm-arn-${Env}
+
+  DLQMessageAlarmArn:
+    Description: ARN of the DLQ message CloudWatch alarm
+    Value: !GetAtt DLQMessageAlarm.Arn
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-dlq-message-alarm-arn-${Env}
+
+  LambdaErrorAlarmArn:
+    Description: ARN of the Lambda error CloudWatch alarm
+    Value: !GetAtt LambdaErrorAlarm.Arn
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-lambda-error-alarm-arn-${Env}
+
+  LambdaThrottleAlarmArn:
+    Description: ARN of the Lambda throttle CloudWatch alarm
+    Value: !GetAtt LambdaThrottleAlarm.Arn
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-lambda-throttle-alarm-arn-${Env}
+
+  DBConnectionFailureAlarmArn:
+    Description: ARN of the DB connection failure CloudWatch alarm
+    Value: !GetAtt DBConnectionFailureAlarm.Arn
+    Export:
+      Name: !Sub project-hie-analytics-database-processor-db-connection-failure-alarm-arn-${Env}
