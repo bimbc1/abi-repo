@@ -155,6 +155,7 @@ Resources:
       Layers:
         - !Ref Pg8000Layer
         - !Ref RetryBackoffLayer
+        - !Ref RdsCaBundleLayer
 
       VpcConfig:
         SubnetIds:
