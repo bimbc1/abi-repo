@@ -1,0 +1,121 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: IAM role stack for partner payload monitoring Lambda
+Parameters:
+  Env:
+    Type: String
+    AllowedValues:
+    - dev
+    - stg
+    - prod
+  DBSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing DB credentials
+Resources:
+  PartnerMonitoringLambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      Path: /project/
+      RoleName: !Join ["-", ["project-hie-analytics-partner-file-delivery-monitor-role", !Ref Env]]
+      PermissionsBoundary: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/vaec/project-admin
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaVPCAccessExecutionRole
+        - !Ref ProjectPartnerFileDeliveryMonitorPolicy
+        - !Ref ProjectPartnerFileOracleHealthBucket
+        - !Ref ProjectPartnerSQSPolicy
+        - !Ref ProjectPartnerCloudWatchPolicy
+
+  ProjectPartnerFileDeliveryMonitorPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: IAM policy for partner file delivery monitoring Lambda
+      Path: /project/
+      ManagedPolicyName: !Join ["-", ["project-hie-analytics-partner-file-delivery-monitor-policy", !Ref Env]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadDbSecret
+            Effect: Allow
+            Action:
+              - secretsmanager:GetSecretValue
+            Resource: !Ref DBSecretArn
+          - Sid: PublishToSNS
+            Effect: Allow
+            Action:
+              - sns:Publish
+            Resource: !ImportValue
+              Fn::Sub: project-hie-analytics-partner-file-delivery-sns-topic-arn-${Env}
+
+  ProjectPartnerFileOracleHealthBucket:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: IAM policy to allow Lambda to read and list objects from the OracleHealth S3 bucket
+      Path: /project/
+      ManagedPolicyName: !Join ["-", ["project-hie-analytics-partner-file-oracle-health-bucket-policy", !Ref Env]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: S3GetObject
+            Effect: Allow
+            Action:
+              - s3:GetObject
+            Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-oraclehealth-documents-${Env}/*
+          - Sid: S3ListBucket
+            Effect: Allow
+            Action:
+              - s3:ListBucket
+            Resource: !Sub arn:${AWS::Partition}:s3:::project-hie-analytics-oraclehealth-documents-${Env}
+
+  ProjectPartnerSQSPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: IAM policy to allow Lambda to read and delete messages from SQS queue
+      Path: /project/
+      ManagedPolicyName: !Join ["-", ["project-hie-analytics-partner-file-delivery-sqs-policy", !Ref Env]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SQSAccess
+            Effect: Allow
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+              - sqs:ChangeMessageVisibility
+              - sqs:GetQueueUrl
+            Resource: 
+              - !ImportValue
+                Fn::Sub: project-hie-analytics-database-processor-queue-arn-${Env}
+              - !ImportValue
+                 Fn::Sub: project-hie-analytics-database-processor-dlq-arn-${Env}
+
+  ProjectPartnerCloudWatchPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      Description: IAM policy to allow Lambda to put metric data to CloudWatch
+      Path: /project/
+      ManagedPolicyName: !Join ["-", ["project-hie-analytics-partner-file-delivery-cloudwatch-policy", !Ref Env]]
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CloudWatchPutMetricData
+            Effect: Allow
+            Action:
+              - cloudwatch:PutMetricData
+            Resource: "*"
+
+
+Outputs:
+  PartnerMonitoringLambdaRoleArn:
+    Description: ARN of the Lambda execution role
+    Value: !GetAtt PartnerMonitoringLambdaRole.Arn
+    Export:
+      Name: !Sub project-hie-analytics-partner-file-delivery-monitor-role-arn-${Env}
+
