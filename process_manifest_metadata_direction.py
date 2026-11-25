@@ -1191,7 +1191,7 @@ def extract_disclosure_report_rows(bucket, key):
         })
     return rows
     # ---SQS MESSAGE BUILDERS---
-def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta, zip_meta,
+def build_manifest_metadata_message(bucket, trigger_key, batch_id, batch_type, manifest_meta, zip_meta,
                                      manifest_expected_counts, partner_context):
     zip_actual_count = count_zip(bucket, zip_meta["key"])
     zip_expected_count = manifest_expected_counts.get("CCDA", 0)
@@ -1230,6 +1230,7 @@ def build_manifest_metadata_message(bucket, trigger_key, batch_id, manifest_meta
         },
         "partner_id": partner_context.get("partner_id"),
         "ingestion_method": INGESTION_METHOD,
+        "direction": "inbound" if batch_type == "RECEIVED" else "outbound",
         "partner": partner_context,
         "files": file_metadata,
         "counts": {
@@ -1524,7 +1525,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
         bucket, batch_id, manifest_meta, report_meta, zip_meta, processing_start
     )
     manifest_message = build_manifest_metadata_message(
-        bucket, trigger_key, batch_id, manifest_meta, zip_meta, manifest_expected_counts, partner_context
+        bucket, trigger_key, batch_id, batch_type, manifest_meta, zip_meta, manifest_expected_counts, partner_context
     )
     report_message = build_patient_report_metadata_message(
         bucket, trigger_key, batch_id, batch_type, manifest_meta, report_meta, manifest_expected_counts, partner_context
