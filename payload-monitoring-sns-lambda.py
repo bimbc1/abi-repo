@@ -507,4 +507,3 @@ def lambda_handler(event, context):
             cur.close()
         if conn:
             conn.close()
-            
