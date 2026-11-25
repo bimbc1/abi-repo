@@ -1,0 +1,146 @@
+---
+AWSTemplateFormatVersion: "2010-09-09"
+Description: HIE Analytics Lambda stack for partner payload monitoring
+
+Parameters:
+  Env:
+    Type: String
+    Description: Environment to deploy into
+    AllowedValues:
+      - dev
+      - stg
+      - prod
+
+  DBSecretArn:
+    Type: String
+    Description: ARN of the Secrets Manager secret containing DB credentials
+
+  DBHost:
+    Type: String
+    Description: RDS endpoint hostname
+
+  DBName:
+    Type: String
+    Description: PostgreSQL database name
+
+  S3BName:
+    Type: String
+    Description: S3 Bucket name for Lambda Layers
+ 
+  DBPort:
+    Type: Number
+    Default: 5432
+    Description: PostgreSQL database port
+
+Mappings:
+  EnvConfig:
+    dev:
+      LambdaSubnetId1: subnet-092e6feb6f16ad305
+      LambdaSubnetId2: subnet-04fe05961116e18ba
+      LambdaSecurityGroupId: sg-056a422f0eda72391
+
+    stg:
+      LambdaSubnetId1: subnet-093620a02fadb09b4
+      LambdaSubnetId2: subnet-0dd1c418bbca6d799
+      LambdaSecurityGroupId: sg-029d65b336757f594
+
+    prod:
+      LambdaSubnetId1: subnet-yyyyyyyyyyyyyy1
+      LambdaSubnetId2: subnet-yyyyyyyyyyyyyy2
+      LambdaSecurityGroupId: sg-yyyyyyyyyyyyyyyy
+
+Resources:
+  Pg8000Layer:
+    Type: AWS::Lambda::LayerVersion
+    Properties:
+      LayerName: !Sub 'project-hie-analytics-partner-payload-monitoring-${Env}'
+      Description: pg8000 for partner-payload-monitoring-lambda
+      CompatibleRuntimes:
+        - python3.14
+      Content:
+        S3Bucket: !Ref S3BName
+        S3Key: pg8000-layer.zip
+
+  MovePayloadLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub project-hie-analytics-partner-payload-monitoring-${Env}
+      Runtime: python3.14
+      Handler: partner-payload-monitoring-sns-lambda.lambda_handler
+      Role: !ImportValue
+        Fn::Sub: project-hie-analytics-partner-file-delivery-monitor-role-arn-${Env}
+      Timeout: 300
+      MemorySize: 256
+
+      Layers:
+        - !Ref Pg8000Layer
+
+      VpcConfig:
+        SubnetIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId1]
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSubnetId2]
+        SecurityGroupIds:
+          - !FindInMap [EnvConfig, !Ref Env, LambdaSecurityGroupId]
+
+      Environment:
+        Variables:
+          DB_SECRET_ARN: !Ref DBSecretArn
+          DB_HOST: !Ref DBHost
+          DB_NAME: !Ref DBName
+          DB_PORT: !Ref DBPort
+          SNS_TOPIC_ARN: !ImportValue 
+            Fn::Sub: project-hie-analytics-partner-file-delivery-sns-topic-arn-${Env}
+          EMAIL_RESEND_INTERVAL_SECONDS: "43200"
+          ENVIRONMENT: !Ref Env
+          SNS_SUBJECT_TEMPLATE: "Notification of $PARTNER_NAME File Delivery Interruption in the $ENVIRONMENT Environment"
+          SNS_MESSAGE_TEMPLATE: "$PARTNER_NAME files have not been received in the past $LAST_SEEN_TIME. The system will continue monitoring and will send a notification email once file delivery resumes."
+          WARNING_INFO: "WARNING!! This message is delivered via a shared distribution list. Do not click any links in this email, including unsubscribe links. Any interaction may unsubscribe all recipients and disrupt alerting."
+
+      Code:
+        ZipFile: |
+          def lambda_handler(event, context):
+              return {
+                  "statusCode": 200,
+                  "body": "Lambda deployed successfully"
+              }
+
+  PartnerPayloadMonitoringScheduleRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub project-hie-analytics-payload-monitoring-schedule-${Env}
+      Description: Run partner payload monitoring Lambda every 30 minutes
+      ScheduleExpression: cron(0/5 * * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt MovePayloadLambda.Arn
+          Id: PartnerPayloadMonitoringLambdaTarget
+
+  PermissionForEventBridgeToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref MovePayloadLambda
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt PartnerPayloadMonitoringScheduleRule.Arn
+
+Outputs:
+  MovePayloadLambdaArn:
+    Description: ARN of the monitoring Lambda
+    Value: !GetAtt MovePayloadLambda.Arn
+    Export:
+      Name: !Sub project-hie-analytics-payload-monitoring-lambda-arn-${Env}
+
+  MovePayloadLambdaName:
+    Description: Name of the monitoring Lambda
+    Value: !Ref MovePayloadLambda
+    Export:
+      Name: !Sub project-hie-analytics-payload-monitoring-lambda-name-${Env}
+
+  PartnerPayloadMonitoringScheduleRuleArn:
+    Description: ARN of the EventBridge schedule rule
+    Value: !GetAtt PartnerPayloadMonitoringScheduleRule.Arn
+    Export:
+      Name: !Sub project-hie-analytics-partner-payload-monitoring-schedule-rule-arn-${Env}
+
+
+
