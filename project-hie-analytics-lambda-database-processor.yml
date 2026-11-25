@@ -111,6 +111,17 @@ Resources:
         S3Bucket: !Ref S3BName
         S3Key: project-hie-analytics-retry-backoff.zip
 
+  RdsCaBundleLayer:
+    Type: AWS::Lambda::LayerVersion
+    Properties: 
+      LayerName: !Sub project-hie-analytics-rds-ca-bundle-${Env}
+      Description: RDS CA certificate bundle us-gov-west-1 for verifying the RDS SSL certificate
+      CompatibleRuntimes:
+        - python3.14
+      Content:
+        S3Bucket: !Ref S3BName
+        S3Key: rds-ca-bundle-layer.zip
+
   # ---- CLOUDWATCH LOG GROUP ----
   LambdaLogGroup:
     Type: AWS::Logs::LogGroup
