@@ -120,7 +120,7 @@ Resources:
         - python3.14
       Content:
         S3Bucket: !Ref S3BName
-        S3Key: rds-ca-bundle-layer.zip
+        S3Key: us-gov-west-1-bundle.zip
 
   # ---- CLOUDWATCH LOG GROUP ----
   LambdaLogGroup:
