@@ -265,6 +265,25 @@ def drop_conn():
     conn = None
 
 
+def log_ssl_status(connection):
+    """Log proof that the DB connection uses SSL and the RDS certificate was verified."""
+    try:
+        cur = connection.cursor()
+        cur.execute("SELECT ssl, version, cipher FROM pg_stat_ssl WHERE pid = pg_backend_pid()")
+        ssl_on, tls_version, cipher = cur.fetchone()
+        sock = getattr(connection, "_usock", None)
+        cert = sock.getpeercert() if hasattr(sock, "getpeercert") else None
+        issuer = dict(x[0] for x in cert.get("issuer", ())).get("commonName") if cert else None
+        logger.info("DB SSL check: ssl=%s tls_version=%s cipher=%s certificate_verified=%s issuer=%s",
+                    ssl_on, tls_version, cipher, bool(cert), issuer)
+    except Exception as e:
+        logger.warning("DB SSL check could not run: %s", str(e))
+        try:
+            connection.rollback()
+        except Exception:
+            pass
+
+
 def handle_db_write_failure(e):
     """Called for every failed write attempt. A lost connection is reported as a
     database connection failure (and the connection is reopened on the next attempt);
@@ -734,6 +753,7 @@ def lambda_handler(event, context):
     try:
         conn = get_conn()
         logger.info("DB connection established")
+        log_ssl_status(conn)
     except Exception as e:
         logger.error("DB connection failed: %s", str(e))
         raise
