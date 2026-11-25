@@ -397,8 +397,8 @@ def lambda_handler(event, context):
                         "$PARTNER_NAME",
                         str(partner_name)
                     ).replace(
-                         "$ENVIRONMENT",
-                         os.environ["ENVIRONMENT"]
+                        "$ENVIRONMENT",
+                        os.environ["ENVIRONMENT"]
                     )
 
                     message = SNS_MESSAGE_TEMPLATE.replace(
@@ -507,3 +507,4 @@ def lambda_handler(event, context):
             cur.close()
         if conn:
             conn.close()
+            
