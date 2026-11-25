@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import ssl
 from datetime import datetime, timezone
 import boto3
 import pg8000
@@ -16,6 +17,9 @@ DB_PORT       = int(os.environ.get("DB_PORT", 5432))
 DB_NAME       = os.environ["DB_NAME"]
 AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
 METRIC_NAMESPACE = os.environ["METRIC_NAMESPACE"]
+
+RDS_CA_BUNDLE = "/opt/us-gov-west-1-bundle.pem"
+SSL_CONTEXT   = ssl.create_default_context(cafile=RDS_CA_BUNDLE)
 
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
@@ -221,7 +225,7 @@ def get_conn():
                 database=DB_NAME,
                 user=username,
                 password=password,
-                ssl_context=True,
+                ssl_context=SSL_CONTEXT,
                 timeout=5,
             )
         except Exception as e:
