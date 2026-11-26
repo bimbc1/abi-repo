@@ -1470,7 +1470,7 @@ def build_metadata_messages(bucket, trigger_key, processing_start):
     if batch_type is None:
         logger.warning(
             "Batch %s | file %s does not carry a recognizable batch-type "
-            "marker (expected 'outbound'/'inbound' on the manifest, or "
+            "marker (expected 'outbound' (Received) / 'inbound' (Disclosure) on the manifest, or "
             "'Received'/'Disclosure' on the report/zip). Skipping -- this "
             "file will not be paired with anything.",
             batch_id,
