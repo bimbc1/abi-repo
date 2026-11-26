@@ -52,7 +52,7 @@ Resources:
     Properties:
       AlarmName: !Sub Lambda-DatabaseConnectionFailures-${Env}
       AlarmDescription: Fires when any Lambda (Manifest Metadata, Database Processor,
-        CCDA Extraction or Payload Monitoring) fails to connect to the database.
+        CCDA Extraction, Payload Monitoring or Tables Generator) fails to connect to the database.
         Check the Failed Database Connections gauges on the dashboard to see which one.
       Metrics:
         - Id: mm
@@ -131,9 +131,28 @@ Resources:
                         Fn::Sub: project-hie-analytics-payload-monitoring-lambda-arn-${Env}
                 - Name: FailureType
                   Value: DatabaseConnectionFailure
+        - Id: tg
+          Label: Tables Generator Lambda
+          ReturnData: false
+          MetricStat:
+            Stat: Sum
+            Period: 300
+            Metric:
+              Namespace: HIE/OperationalMonitoring
+              MetricName: RetryEvents
+              Dimensions:
+                - Name: FunctionName
+                  Value: !Select
+                    - 6
+                    - !Split
+                      - ':'
+                      - !ImportValue
+                        Fn::Sub: project-hie-analytics-process-table-generator-lambda-arn-${Env}
+                - Name: FailureType
+                  Value: DatabaseConnectionFailure
         - Id: total
           Label: Database connection failures (all Lambdas)
-          Expression: SUM([FILL(mm, 0), FILL(dp, 0), FILL(cc, 0), FILL(pm, 0)])
+          Expression: SUM([FILL(mm, 0), FILL(dp, 0), FILL(cc, 0), FILL(pm, 0), FILL(tg, 0)])
           ReturnData: true
       EvaluationPeriods: 1
       Threshold: 1
@@ -979,21 +998,6 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${PayloadMonitoringFunctionName}\" FailureType=\"Create\" PartnerId=\"__PARTNER__\"', 'Sum')",
-                        "id": "pmcs",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SUM(pmcs)",
-                        "id": "pmc",
-                        "label": "Payload Monitoring Lambda",
-                        "color": "#9467bd"
-                      }
-                    ],
-                    [
-                      {
                         "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${CCDAExtractionFunctionName}\" FailureType=\"Create\" PartnerId=\"__PARTNER__\"', 'Sum')",
                         "id": "cccs",
                         "visible": false
@@ -1005,6 +1009,21 @@ Resources:
                         "id": "ccc",
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${TablesGeneratorFunctionName}\" FailureType=\"Create\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "tgcs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(tgcs)",
+                        "id": "tgc",
+                        "label": "Tables Generator Lambda",
+                        "color": "#ff7f0e"
                       }
                     ]
                   ]
@@ -1089,6 +1108,21 @@ Resources:
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
                       }
+                    ],
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${TablesGeneratorFunctionName}\" FailureType=\"Read\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "tgrs",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(tgrs)",
+                        "id": "tgr",
+                        "label": "Tables Generator Lambda",
+                        "color": "#ff7f0e"
+                      }
                     ]
                   ]
                 }
@@ -1130,21 +1164,6 @@ Resources:
                     ],
                     [
                       {
-                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${DatabaseProcessorFunctionName}\" FailureType=\"Update\" PartnerId=\"__PARTNER__\"', 'Sum')",
-                        "id": "dpus",
-                        "visible": false
-                      }
-                    ],
-                    [
-                      {
-                        "expression": "SUM(dpus)",
-                        "id": "dpu",
-                        "label": "Database Processor Lambda",
-                        "color": "#2ca02c"
-                      }
-                    ],
-                    [
-                      {
                         "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${PayloadMonitoringFunctionName}\" FailureType=\"Update\" PartnerId=\"__PARTNER__\"', 'Sum')",
                         "id": "pmus",
                         "visible": false
@@ -1171,6 +1190,21 @@ Resources:
                         "id": "ccu",
                         "label": "CCDA Extraction Lambda",
                         "color": "#8c564b"
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SEARCH('{HIE/OperationalMonitoring,FunctionName,FailureType,PartnerId} MetricName=\"CRUDFailureEvents\" FunctionName=\"${TablesGeneratorFunctionName}\" FailureType=\"Update\" PartnerId=\"__PARTNER__\"', 'Sum')",
+                        "id": "tgus",
+                        "visible": false
+                      }
+                    ],
+                    [
+                      {
+                        "expression": "SUM(tgus)",
+                        "id": "tgu",
+                        "label": "Tables Generator Lambda",
+                        "color": "#ff7f0e"
                       }
                     ]
                   ]
@@ -1408,6 +1442,41 @@ Resources:
                       "SNSPublishFailures",
                       {
                         "label": "SNS publish",
+                        "color": "#d13212"
+                      }
+                    ]
+                  ]
+                }
+              },
+              {
+                "type": "metric",
+                "x": 8,
+                "y": 48,
+                "width": 8,
+                "height": 6,
+                "properties": {
+                  "title": "Failed Database Connections - Tables Generator Lambda",
+                  "region": "${AWS::Region}",
+                  "view": "gauge",
+                  "stat": "Sum",
+                  "period": 300,
+                  "setPeriodToTimeRange": true,
+                  "yAxis": {
+                    "left": {
+                      "min": 0,
+                      "max": 25
+                    }
+                  },
+                  "metrics": [
+                    [
+                      "HIE/OperationalMonitoring",
+                      "RetryEvents",
+                      "FunctionName",
+                      "${TablesGeneratorFunctionName}",
+                      "FailureType",
+                      "DatabaseConnectionFailure",
+                      {
+                        "label": "Database connection",
                         "color": "#d13212"
                       }
                     ]
