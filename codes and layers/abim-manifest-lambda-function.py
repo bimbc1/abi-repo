@@ -375,6 +375,11 @@ def _publish_operational_alert(subject, message, failure_category):
         )
         return True
     except Exception:
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSPublishFailures",
+            value=1
+        )
         logging.error(
             "Failed to publish alert to SNS topic '%s' for category '%s'.",
             OPERATIONAL_SNS_TOPIC_ARN,
@@ -1146,6 +1151,11 @@ def send_recovery_sns(partner_name, partner_id, environment):
         )
         logger.info("SNS notification sent for partner_id=%s", partner_id)
     except Exception:
+        put_metric(
+            namespace="HIE/OperationalMonitoring",
+            metric_name="SNSPublishFailures",
+            value=1
+        )
         logger.exception(
             "SNS notification failed for partner_id=%s, but database changes were already committed.",
             partner_id,
