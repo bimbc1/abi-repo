@@ -1692,11 +1692,12 @@ def send_metadata_to_sqs(message):
             unit="Bytes",
             dimensions=[{"Name": "PartnerId", "Value": str(partner_id)}]
         )
-        if message["message_type"] == "PATIENT_REPORT_METADATA_UPSERT":
-            # ---FILES IN/OUT PER PARTNER ID + "All"---
+        if (message["message_type"] == "PATIENT_REPORT_METADATA_UPSERT"
+                and message.get("report_type") == "RECEIVED"):
+            # ---FILES IN PER PARTNER ID + "All" (Received reports only)---
             put_partner_metric(
                 "HIE/PartnerMonitoring",
-                "FilesOut" if message.get("direction") == "outbound" else "FilesIn",
+                "FilesIn",
                 partner_id,
                 message["metrics"].get("files_in", 0)
             )
