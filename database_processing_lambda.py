@@ -19,7 +19,17 @@ AWS_REGION    = os.environ.get("AWS_REGION", "us-gov-west-1")
 METRIC_NAMESPACE = os.environ["METRIC_NAMESPACE"]
 
 RDS_CA_BUNDLE = "/opt/us-gov-west-1-bundle.pem"
-SSL_CONTEXT   = ssl.create_default_context(cafile=RDS_CA_BUNDLE)
+_ssl_context  = None
+
+
+def get_ssl_context():
+    """Build the verified SSL context on first use, not at import. If the CA bundle layer or
+    file is missing, the error happens inside connect(), so it is logged and counted as a
+    failed connection attempt instead of crashing the Lambda cold start."""
+    global _ssl_context
+    if _ssl_context is None:
+        _ssl_context = ssl.create_default_context(cafile=RDS_CA_BUNDLE)
+    return _ssl_context
 
 # ---- AWS CLIENTS ----
 sm         = boto3.client("secretsmanager", region_name=AWS_REGION)
@@ -226,7 +236,7 @@ def get_conn():
                 database=DB_NAME,
                 user=username,
                 password=password,
-                ssl_context=SSL_CONTEXT,
+                ssl_context=get_ssl_context(),
                 timeout=5,
             )
         except Exception as e:
