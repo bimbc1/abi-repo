@@ -28,8 +28,11 @@ DB_HOST         = os.environ["DB_HOST"]
 DB_PORT         = int(os.environ.get("DB_PORT", "5432"))
 DB_NAME         = os.environ.get("DB_NAME", "ccda01")
 AWS_REGION      = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION")
+METRIC_NAMESPACE = os.environ.get("METRIC_NAMESPACE", "HIE/OperationalMonitoring")
+FUNCTION_NAME   = os.environ.get("AWS_LAMBDA_FUNCTION_NAME", "unknown")
     # ---AWS CLIENTS---
 sm = boto3.client("secretsmanager", region_name=AWS_REGION)
+cloudwatch = boto3.client("cloudwatch", region_name=AWS_REGION)
     # ---CREDENTIALS CACHING---
 _cached_creds = None
     # ---CRUD OPERATION TRACKING---
@@ -50,7 +53,34 @@ _last_crud_operation = None
 def crud_operation_for(sql):
     stripped = (sql or "").strip()
     first_word = stripped.split(None, 1)[0].upper() if stripped else ""
+    # Creating a column (ALTER TABLE ... ADD COLUMN) counts as Create, like creating a table.
+    if first_word == "ALTER" and "ADD COLUMN" in stripped.upper():
+        return "Create"
     return CRUD_OPERATIONS.get(first_word, "Other")
+    # ---CRUD FAILURE METRIC (dashboard "CRUD failures - Create / Read / Update" widgets)---
+    # The Tables Generator is not tied to one partner, so the failure is published with
+    # PartnerId="All" only (it shows when "All" is selected in the dashboard dropdown).
+CRUD_FAILURE_TYPES = ("Create", "Read", "Update")
+def put_crud_failure_metric(failure_type):
+    if failure_type not in CRUD_FAILURE_TYPES:
+        return
+    try:
+        cloudwatch.put_metric_data(
+            Namespace=METRIC_NAMESPACE,
+            MetricData=[{
+                "MetricName": "CRUDFailureEvents",
+                "Value": 1,
+                "Unit": "Count",
+                "Dimensions": [
+                    {"Name": "FunctionName", "Value": FUNCTION_NAME},
+                    {"Name": "FailureType", "Value": failure_type},
+                    {"Name": "PartnerId", "Value": "All"},
+                ],
+            }],
+        )
+        logger.info("Published CRUDFailureEvents FailureType=%s PartnerId=All", failure_type)
+    except Exception as metric_error:
+        logger.error("Failed to publish CRUDFailureEvents metric: %s", metric_error)
 class TrackingCursor:
     """Wraps the cursor so every execute() records its CRUD operation."""
     def __init__(self, cur):
@@ -209,8 +239,7 @@ def ensure_tables(cur):
             repository_id TEXT,
             source_id TEXT,
             ccda_file_name TEXT NOT NULL,
-            commonwell_indicator BOOLEAN,
-            ohin_indicator BOOLEAN
+            commonwell_indicator BOOLEAN
         );
     """)
         # ---ADDING NEW COLUMNS TO PATIENT_DETAILS TABLE IF THEY DO NOT EXIST---
@@ -230,8 +259,6 @@ def ensure_tables(cur):
         ADD COLUMN IF NOT EXISTS receiving_organization_id VARCHAR(64);
         ALTER TABLE patient_details
         ADD COLUMN IF NOT EXISTS commonwell_indicator BOOLEAN;
-        ALTER TABLE patient_details
-        ADD COLUMN IF NOT EXISTS ohin_indicator BOOLEAN;
     """)
         # ---ENSURING THE CHECK CONSTRAINT ON SSN IS PRESENT---
     cur.execute("""
@@ -408,6 +435,7 @@ def lambda_handler(event, context):
                 _last_crud_operation,
                 type(e).__name__,
             )
+            put_crud_failure_metric(_last_crud_operation)
         global _cached_creds
         _cached_creds = None
         logger.exception("Failed creating tables")
