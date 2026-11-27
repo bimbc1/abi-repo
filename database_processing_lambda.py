@@ -296,9 +296,9 @@ def handle_db_write_failure(e):
     if is_connection_error(e):
         reset_failure_tracking()          # not a CRUD failure
         if not isinstance(e, DatabaseConnectionError):
-            # connection was open and then lost; get_conn() already reports its own failures
+            # connection was open and then lost. No RetryEvents here: it is published only in
+            # connect()'s except block, once per failed connection attempt (no double count).
             logger.warning("DB connection lost during write: %s", str(e))
-            publish_db_connection_failure()
         drop_conn()
         return None
     failure_type = classify_failure(e)
