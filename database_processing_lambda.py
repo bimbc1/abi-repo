@@ -124,26 +124,27 @@ _DB_ERROR_TYPES = tuple(
 )
 
 
+# Only these CRUD FailureTypes are published (the ticket allows Create and Read only).
+# A failed commit means the inserted rows were not saved, so it counts as Create.
+CRUD_FAILURE_TYPES = {"Read": "Read", "Create": "Create", "Commit": "Create"}
+
+
 def classify_failure(e, operation=None):
-    """Return the CRUD FailureType for a failed write. Every non-connection error gets a
-    label, so a failed query never publishes nothing:
-      * connection error                       -> None (counted as RetryEvents instead)
-      * error during a tracked step            -> that step (Read / Create / Commit)
-      * pg8000 DatabaseError, no tracked step  -> "Other"
-      * ValueError, no tracked step (bad data) -> "Validation"
-      * any other error                        -> "Other"
+    """Return the CRUD FailureType ("Create" or "Read") for a failed write, or None.
+      * connection error                         -> None (counted as RetryEvents instead)
+      * database error during a Read step        -> "Read"
+      * database error during a Create or Commit -> "Create"
+      * anything else (bad input such as a missing partner_id, a non-database
+        error, or a database error outside a tracked step) -> None (no CRUD metric;
+        still logged and counted in ProcessingFailed / LambdaProcessingFailures)
     The step is read from the exception (e.crud_operation, set at the failure point)
     unless passed in."""
     if is_connection_error(e):
         return None
+    if not isinstance(e, _DB_ERROR_TYPES):
+        return None
     operation = operation or getattr(e, "crud_operation", None)
-    if operation:
-        return operation
-    if isinstance(e, _DB_ERROR_TYPES):
-        return "Other"
-    if isinstance(e, ValueError):
-        return "Validation"
-    return "Other"
+    return CRUD_FAILURE_TYPES.get(operation)
 
 
 def reset_failure_tracking():
@@ -305,7 +306,7 @@ def handle_db_write_failure(e):
         e.crud_failure_type = failure_type   # carry the result on the exception too
     except Exception:
         pass
-    logger.warning("DB write attempt failed (%s): %s", failure_type, str(e))
+    logger.warning("DB write attempt failed (%s): %s", failure_type or "not a CRUD failure", str(e))
     try:
         conn.rollback()
     except Exception:
